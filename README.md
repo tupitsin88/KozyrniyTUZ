@@ -37,4 +37,5 @@
 
 - [Паспорт проекта](PROJECT.md)
 - [Требования безопасности](SECURITY_REQUIREMENTS.md)
+- [Модель угроз S03](THREAT_MODEL.md)
 - [Использование генеративного ИИ](AI_USAGE.md)
