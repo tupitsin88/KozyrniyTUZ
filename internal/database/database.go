@@ -108,9 +108,9 @@ func applyMigration(ctx context.Context, db *sql.DB, name string) error {
 	if _, err := tx.ExecContext(ctx, string(source)); err != nil {
 		return fmt.Errorf("apply database migration %s: %w", name, err)
 	}
-	checksum = sha256.Sum256(source)
+	migrationChecksum := sha256.Sum256(source)
 	if _, err := tx.ExecContext(ctx,
-		"INSERT INTO schema_migrations (version, checksum) VALUES ($1, $2)", name, checksum[:],
+		"INSERT INTO schema_migrations (version, checksum) VALUES ($1, $2)", name, migrationChecksum[:],
 	); err != nil {
 		return fmt.Errorf("record database migration %s: %w", name, err)
 	}
