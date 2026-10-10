@@ -33,6 +33,8 @@ func NewHTTPHandler(service *Service) http.Handler {
 	mux.HandleFunc("/api/login", handler.login)
 	mux.HandleFunc("/api/session", handler.session)
 	mux.HandleFunc("/api/logout", handler.logout)
+	mux.HandleFunc("/api/clubs", handler.clubs)
+	mux.HandleFunc("/api/profile", handler.profile)
 	return securityHeaders(mux)
 }
 
