@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
-	"os"
-)
+	"time"
 
-const defaultPort = "8080"
+	"github.com/tupitsin88/KozyrniyTUZ/internal/config"
+	"github.com/tupitsin88/KozyrniyTUZ/internal/database"
+)
 
 type healthResponse struct {
 	Status  string `json:"status"`
@@ -37,12 +40,34 @@ func healthz(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = defaultPort
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
+	settings, err := config.Load()
+	if err != nil {
+		return err
 	}
 
-	address := ":" + port
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	db, err := database.Open(ctx, settings.DatabaseURL, database.PoolConfig{
+		MaxOpenConns:    settings.DBMaxOpenConns,
+		MaxIdleConns:    settings.DBMaxIdleConns,
+		ConnMaxLifetime: settings.DBConnMaxLifetime,
+		ConnMaxIdleTime: settings.DBConnMaxIdleTime,
+	})
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	address := ":" + settings.Port
 	log.Printf("club-membership API listening on %s", address)
-	log.Fatal(http.ListenAndServe(address, newHandler()))
+	if err := http.ListenAndServe(address, newHandler()); err != nil {
+		return fmt.Errorf("serve HTTP: %w", err)
+	}
+	return nil
 }
