@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/tupitsin88/KozyrniyTUZ/internal/auth"
 	"github.com/tupitsin88/KozyrniyTUZ/internal/config"
 	"github.com/tupitsin88/KozyrniyTUZ/internal/database"
 )
@@ -17,9 +18,12 @@ type healthResponse struct {
 	Service string `json:"service"`
 }
 
-func newHandler() http.Handler {
+func newHandler(authHandlers ...http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", healthz)
+	if len(authHandlers) != 0 {
+		mux.Handle("/api/", authHandlers[0])
+	}
 	return mux
 }
 
@@ -64,9 +68,19 @@ func run() error {
 	}
 	defer db.Close()
 
+	authService, err := auth.NewService(db, settings)
+	if err != nil {
+		return err
+	}
+	if err := authService.Bootstrap(ctx, settings.BootstrapLogin, settings.BootstrapPassword); err != nil {
+		return err
+	}
+	settings.BootstrapPassword = ""
+	settings.BootstrapLogin = ""
+
 	address := ":" + settings.Port
 	log.Printf("club-membership API listening on %s", address)
-	if err := http.ListenAndServe(address, newHandler()); err != nil {
+	if err := http.ListenAndServe(address, newHandler(auth.NewHTTPHandler(authService))); err != nil {
 		return fmt.Errorf("serve HTTP: %w", err)
 	}
 	return nil
