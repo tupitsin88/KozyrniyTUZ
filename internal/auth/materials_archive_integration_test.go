@@ -142,6 +142,9 @@ func TestPostgresMaterialsAndArchiveLifecycle(t *testing.T) {
 	if len(clubMembers) != 2 {
 		t.Fatalf("club member list count = %d, want 2: %#v", len(clubMembers), clubMembers)
 	}
+	assertCursorPagination(t, func(target string) *httptest.ResponseRecorder {
+		return applicationAPIRequest(handler, service, &adminA, http.MethodGet, target, "", "", "")
+	}, "/api/clubs/"+clubA+"/members", func(member clubMemberRecord) string { return member.UserID })
 	for _, session := range []*applicationTestSession{&outsider, &adminB, &root} {
 		if response := applicationAPIRequest(handler, service, session, http.MethodGet,
 			"/api/clubs/"+clubA+"/members", "", "", ""); response.Code != http.StatusNotFound {
@@ -217,6 +220,12 @@ func TestPostgresMaterialsAndArchiveLifecycle(t *testing.T) {
 			t.Fatalf("member received unexpected material collection: %#v", list)
 		}
 	}
+	if response := createMaterial(adminA, clubA, "second material for pagination"); response.Code != http.StatusCreated {
+		t.Fatalf("second material creation status = %d", response.Code)
+	}
+	assertCursorPagination(t, func(target string) *httptest.ResponseRecorder {
+		return applicationAPIRequest(handler, service, &member, http.MethodGet, target, "", "", "")
+	}, "/api/clubs/"+clubA+"/materials", func(material materialRecord) string { return material.ID })
 	if response := applicationAPIRequest(handler, service, &outsider, http.MethodGet,
 		"/api/clubs/"+clubA+"/materials", "", "", ""); response.Code != http.StatusOK {
 		t.Fatalf("nonmember material list status = %d", response.Code)
@@ -353,7 +362,7 @@ func TestPostgresMaterialsAndArchiveLifecycle(t *testing.T) {
 	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM club_administrators WHERE club_id = $1", clubA).Scan(&keptAdministrators); err != nil {
 		t.Fatal(err)
 	}
-	if keptMaterials != 1 || keptMemberships != 3 || keptAdministrators != 1 {
+	if keptMaterials != 2 || keptMemberships != 3 || keptAdministrators != 1 {
 		t.Fatalf("archive removed related rows: materials=%d memberships=%d administrators=%d", keptMaterials, keptMemberships, keptAdministrators)
 	}
 	if response := readMaterial(member, material.ID); response.Code != http.StatusNotFound {

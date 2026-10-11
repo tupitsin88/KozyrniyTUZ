@@ -197,7 +197,54 @@ func TestPostgresAuthenticationLifecycle(t *testing.T) {
 	if _, err := upgradingService.Authenticate(ctx, base64Token(absoluteRaw)); !errors.Is(err, ErrSessionInvalid) {
 		t.Fatalf("absolute-expired session remained valid: %v", err)
 	}
+
+	cleanupNow := time.Now().UTC()
+	cleanupCandidates := []struct {
+		name      string
+		created   time.Time
+		lastSeen  time.Time
+		expires   time.Time
+		revokedAt *time.Time
+		remove    bool
+	}{
+		{name: "revoked-old", created: cleanupNow.Add(-40 * 24 * time.Hour), lastSeen: cleanupNow.Add(-39*24*time.Hour - time.Second), expires: cleanupNow.Add(-39 * 24 * time.Hour), revokedAt: timePointer(cleanupNow.Add(-38 * 24 * time.Hour)), remove: true},
+		{name: "absolute-old", created: cleanupNow.Add(-40 * 24 * time.Hour), lastSeen: cleanupNow.Add(-39 * 24 * time.Hour), expires: cleanupNow.Add(-31 * 24 * time.Hour), remove: true},
+		{name: "idle-old", created: cleanupNow.Add(-40 * 24 * time.Hour), lastSeen: cleanupNow.Add(-31*24*time.Hour - time.Hour), expires: cleanupNow.Add(time.Hour), remove: true},
+		{name: "recent-revoked", created: cleanupNow.Add(-48 * time.Hour), lastSeen: cleanupNow.Add(-24 * time.Hour), expires: cleanupNow.Add(12 * time.Hour), revokedAt: timePointer(cleanupNow.Add(-12 * time.Hour))},
+		{name: "active", created: cleanupNow.Add(-time.Hour), lastSeen: cleanupNow, expires: cleanupNow.Add(12 * time.Hour)},
+	}
+	cleanupHashes := make(map[string][32]byte, len(cleanupCandidates))
+	cleanupCSRF := make([]byte, 32)
+	for _, candidate := range cleanupCandidates {
+		hash := sha256.Sum256([]byte("cleanup-session-" + candidate.name))
+		cleanupHashes[candidate.name] = hash
+		if _, err := db.ExecContext(ctx, `
+			INSERT INTO user_sessions (token_hash, csrf_token, user_id, created_at, last_seen_at, expires_at, revoked_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)`, hash[:], cleanupCSRF, userID,
+			candidate.created, candidate.lastSeen, candidate.expires, candidate.revokedAt); err != nil {
+			t.Fatalf("insert %s cleanup fixture: %v", candidate.name, err)
+		}
+	}
+	deleted, err := upgradingService.CleanupExpiredSessions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 3 {
+		t.Fatalf("deleted session count = %d, want 3", deleted)
+	}
+	for _, candidate := range cleanupCandidates {
+		var exists bool
+		hash := cleanupHashes[candidate.name]
+		if err := db.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM user_sessions WHERE token_hash = $1)", hash[:]).Scan(&exists); err != nil {
+			t.Fatal(err)
+		}
+		if exists == candidate.remove {
+			t.Errorf("session %q exists = %t, remove = %t", candidate.name, exists, candidate.remove)
+		}
+	}
 }
+
+func timePointer(value time.Time) *time.Time { return &value }
 
 func base64Token(raw []byte) string {
 	return base64.RawURLEncoding.EncodeToString(raw)

@@ -3,9 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"os"
+	"os/signal"
 	"time"
 
 	"github.com/tupitsin88/KozyrniyTUZ/internal/auth"
@@ -123,10 +127,57 @@ func run() error {
 	settings.BootstrapPassword = ""
 	settings.BootstrapLogin = ""
 
-	address := ":" + settings.Port
+	address := net.JoinHostPort(settings.ListenHost, settings.Port)
 	log.Printf("club-membership API listening on %s", address)
-	if err := http.ListenAndServe(address, newHandler(auth.NewHTTPHandler(authService))); err != nil {
-		return fmt.Errorf("serve HTTP: %w", err)
+	server := newHTTPServer(address, newHandler(auth.NewHTTPHandler(authService)))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	go authService.RunSessionCleanup(ctx, func(err error) {
+		log.Printf("session cleanup failed: %v", err)
+	})
+	return serveHTTP(ctx, server)
+}
+
+func newHTTPServer(address string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              address,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    16 << 10,
 	}
-	return nil
+}
+
+func serveHTTP(ctx context.Context, server *http.Server) error {
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		return fmt.Errorf("listen HTTP: %w", err)
+	}
+
+	serveErrors := make(chan error, 1)
+	go func() {
+		serveErrors <- server.Serve(listener)
+	}()
+
+	select {
+	case err := <-serveErrors:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return fmt.Errorf("serve HTTP: %w", err)
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			_ = server.Close()
+			<-serveErrors
+			return fmt.Errorf("shut down HTTP server: %w", err)
+		}
+		if err := <-serveErrors; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("serve HTTP: %w", err)
+		}
+		return nil
+	}
 }

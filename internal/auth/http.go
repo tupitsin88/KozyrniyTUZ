@@ -8,9 +8,16 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"time"
+	"unicode/utf8"
 )
 
-const maxRequestBody = 16 * 1024
+const (
+	maxRequestBody     = 16 * 1024
+	maxTextRequestBody = 128 * 1024
+	maxTextLength      = 16_000
+	maxClubNameLength  = 160
+)
 
 type HTTPHandler struct {
 	service *Service
@@ -29,8 +36,9 @@ type authResponse struct {
 func NewHTTPHandler(service *Service) http.Handler {
 	handler := &HTTPHandler{service: service}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/register", handler.register)
-	mux.HandleFunc("/api/login", handler.login)
+	trustedProxies := service.trustedProxyCIDRs
+	mux.Handle("/api/register", limitAuthenticationRequests(http.HandlerFunc(handler.register), newSourceRateLimiter(5, time.Minute), "register", service.trustedOrigin, trustedProxies))
+	mux.Handle("/api/login", limitAuthenticationRequests(http.HandlerFunc(handler.login), newSourceRateLimiter(10, time.Minute), "login", service.trustedOrigin, trustedProxies))
 	mux.HandleFunc("/api/session", handler.session)
 	mux.HandleFunc("/api/logout", handler.logout)
 	mux.HandleFunc("/api/clubs", handler.clubs)
@@ -65,6 +73,9 @@ func (h *HTTPHandler) register(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid registration data")
 		case errors.Is(err, ErrLoginExists):
 			writeError(w, http.StatusConflict, "login is unavailable")
+		case errors.Is(err, ErrAuthenticationCapacity):
+			w.Header().Set("Retry-After", "1")
+			writeError(w, http.StatusServiceUnavailable, "authentication service is busy")
 		default:
 			writeError(w, http.StatusInternalServerError, "request failed")
 		}
@@ -98,6 +109,9 @@ func (h *HTTPHandler) login(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusUnauthorized, "invalid login or password")
 		case errors.Is(err, ErrInvalidInput):
 			writeError(w, http.StatusUnauthorized, "invalid login or password")
+		case errors.Is(err, ErrAuthenticationCapacity):
+			w.Header().Set("Retry-After", "1")
+			writeError(w, http.StatusServiceUnavailable, "authentication service is busy")
 		default:
 			writeError(w, http.StatusInternalServerError, "request failed")
 		}
@@ -187,12 +201,16 @@ func (h *HTTPHandler) authenticate(w http.ResponseWriter, r *http.Request) (Prin
 }
 
 func (h *HTTPHandler) requireOrigin(w http.ResponseWriter, r *http.Request) bool {
-	origins := r.Header.Values("Origin")
-	if len(origins) != 1 || origins[0] != h.service.TrustedOrigin() {
+	if !hasExactOrigin(r, h.service.TrustedOrigin()) {
 		writeError(w, http.StatusForbidden, "origin is not allowed")
 		return false
 	}
 	return true
+}
+
+func hasExactOrigin(r *http.Request, trustedOrigin string) bool {
+	origins := r.Header.Values("Origin")
+	return len(origins) == 1 && origins[0] == trustedOrigin
 }
 
 func requireJSON(w http.ResponseWriter, r *http.Request) bool {
@@ -205,7 +223,11 @@ func requireJSON(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, destination any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+	return decodeJSONWithLimit(w, r, destination, maxRequestBody)
+}
+
+func decodeJSONWithLimit(w http.ResponseWriter, r *http.Request, destination any, limit int64) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {
@@ -218,6 +240,10 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, destination any) bool {
 		return false
 	}
 	return true
+}
+
+func textWithinLimit(value string, maxRunes int) bool {
+	return utf8.RuneCountInString(value) <= maxRunes
 }
 
 func (h *HTTPHandler) setSessionCookie(w http.ResponseWriter, raw []byte) {

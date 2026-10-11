@@ -15,9 +15,10 @@ type clubInput struct {
 }
 
 type clubSummary struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	CreatedAt   time.Time `json:"-"`
 }
 
 type clubCreated struct {
@@ -28,11 +29,20 @@ type clubCreated struct {
 }
 
 type profileResponse struct {
-	ID                   string        `json:"id"`
-	Login                string        `json:"login"`
-	GlobalRole           string        `json:"global_role"`
-	Clubs                []clubSummary `json:"clubs"`
-	AdministratorClubIDs []string      `json:"administrator_club_ids"`
+	ID                        string        `json:"id"`
+	Login                     string        `json:"login"`
+	GlobalRole                string        `json:"global_role"`
+	Clubs                     []clubSummary `json:"clubs"`
+	AdministratorClubIDs      []string      `json:"administrator_club_ids"`
+	PendingApplicationClubIDs []string      `json:"pending_application_club_ids"`
+	nextCursor                string        `json:"-"`
+}
+
+type profileClubState struct {
+	Club       clubSummary
+	IsMember   bool
+	IsAdmin    bool
+	HasPending bool
 }
 
 func (h *HTTPHandler) clubs(w http.ResponseWriter, r *http.Request) {
@@ -40,6 +50,10 @@ func (h *HTTPHandler) clubs(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		h.listClubs(w, r)
 	case http.MethodPost:
+		if r.URL.RawQuery != "" {
+			writeError(w, http.StatusBadRequest, "query parameters are not supported")
+			return
+		}
 		h.createClub(w, r)
 	default:
 		methodNotAllowed(w, "GET, POST")
@@ -47,12 +61,21 @@ func (h *HTTPHandler) clubs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *HTTPHandler) listClubs(w http.ResponseWriter, r *http.Request) {
-	clubs, err := readActiveClubs(r.Context(), h.service.db)
+	page, err := parsePaginationQuery(r.URL.RawQuery)
 	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid pagination parameters")
+		return
+	}
+	clubs, err := readActiveClubs(r.Context(), h.service.db, page)
+	if err != nil {
+		if errors.Is(err, errInvalidPagination) {
+			writeError(w, http.StatusBadRequest, "invalid pagination parameters")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "request failed")
 		return
 	}
-	writeJSON(w, clubs)
+	writePage(w, clubs)
 }
 
 func (h *HTTPHandler) createClub(w http.ResponseWriter, r *http.Request) {
@@ -76,10 +99,10 @@ func (h *HTTPHandler) createClub(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input clubInput
-	if !decodeJSON(w, r, &input) {
+	if !decodeJSONWithLimit(w, r, &input, maxTextRequestBody) {
 		return
 	}
-	if strings.TrimSpace(input.Name) == "" {
+	if strings.TrimSpace(input.Name) == "" || !textWithinLimit(input.Name, maxClubNameLength) || !textWithinLimit(input.Description, maxTextLength) {
 		writeError(w, http.StatusBadRequest, "invalid club data")
 		return
 	}
@@ -106,6 +129,11 @@ func (h *HTTPHandler) profile(w http.ResponseWriter, r *http.Request) {
 	if !allowSafeOrigin(w, r, h.service.TrustedOrigin()) {
 		return
 	}
+	page, err := parsePaginationQuery(r.URL.RawQuery)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid pagination parameters")
+		return
+	}
 	principal, ok := h.authenticate(w, r)
 	if !ok {
 		return
@@ -114,7 +142,7 @@ func (h *HTTPHandler) profile(w http.ResponseWriter, r *http.Request) {
 		writeSessionError(w, err)
 		return
 	}
-	profile, err := readProfile(r.Context(), h.service.db, principal.UserID)
+	profile, err := readProfile(r.Context(), h.service.db, principal.UserID, page)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusUnauthorized, "authentication required")
@@ -123,31 +151,46 @@ func (h *HTTPHandler) profile(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if profile.nextCursor != "" {
+		w.Header().Set("X-Next-Cursor", profile.nextCursor)
+	}
 	writeJSON(w, profile)
 }
 
-func readActiveClubs(ctx context.Context, db *sql.DB) ([]clubSummary, error) {
+func readActiveClubs(ctx context.Context, db *sql.DB, page pageRequest) (pageResult[clubSummary], error) {
+	cursorTime, err := parseTimeCursor(page.Cursor)
+	if err != nil {
+		return pageResult[clubSummary]{}, err
+	}
+	var cursorID any
+	if page.Cursor != nil {
+		cursorID = page.Cursor.ID
+	}
 	rows, err := db.QueryContext(ctx, `
-		SELECT id::text, name, description
+		SELECT id::text, name, description, created_at
 		FROM clubs
 		WHERE status = 'active'
-		ORDER BY created_at DESC, id`)
+		  AND ($1::timestamptz IS NULL OR created_at < $1 OR (created_at = $1 AND id > $2::uuid))
+		ORDER BY created_at DESC, id ASC
+		LIMIT $3`, nullableTime(page.Cursor, cursorTime), cursorID, page.Limit+1)
 	if err != nil {
-		return nil, err
+		return pageResult[clubSummary]{}, err
 	}
 	defer rows.Close()
 	clubs := make([]clubSummary, 0)
 	for rows.Next() {
 		var club clubSummary
-		if err := rows.Scan(&club.ID, &club.Name, &club.Description); err != nil {
-			return nil, err
+		if err := rows.Scan(&club.ID, &club.Name, &club.Description, &club.CreatedAt); err != nil {
+			return pageResult[clubSummary]{}, err
 		}
 		clubs = append(clubs, club)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return pageResult[clubSummary]{}, err
 	}
-	return clubs, nil
+	return finishPage(clubs, page.Limit, func(club clubSummary) pageCursor {
+		return pageCursor{Key: club.CreatedAt.Format(time.RFC3339Nano), ID: club.ID}
+	}), nil
 }
 
 func createClub(ctx context.Context, db *sql.DB, creatorID string, input clubInput) (clubCreated, error) {
@@ -180,57 +223,72 @@ func createClub(ctx context.Context, db *sql.DB, creatorID string, input clubInp
 	return created, nil
 }
 
-func readProfile(ctx context.Context, db *sql.DB, userID string) (profileResponse, error) {
+func readProfile(ctx context.Context, db *sql.DB, userID string, page pageRequest) (profileResponse, error) {
 	var profile profileResponse
 	if err := db.QueryRowContext(ctx,
 		"SELECT id::text, login, global_role FROM users WHERE id = $1", userID,
 	).Scan(&profile.ID, &profile.Login, &profile.GlobalRole); err != nil {
 		return profileResponse{}, err
 	}
+	cursorTime, err := parseTimeCursor(page.Cursor)
+	if err != nil {
+		return profileResponse{}, err
+	}
+	var cursorID any
+	if page.Cursor != nil {
+		cursorID = page.Cursor.ID
+	}
 	rows, err := db.QueryContext(ctx, `
-		SELECT clubs.id::text, clubs.name, clubs.description
-		FROM club_memberships AS memberships
-		JOIN clubs ON clubs.id = memberships.club_id
-		WHERE memberships.user_id = $1
-		  AND clubs.status = 'active'
-		ORDER BY clubs.created_at DESC, clubs.id`, userID)
+		SELECT clubs.id::text, clubs.name, clubs.description, clubs.created_at,
+		       memberships.user_id IS NOT NULL,
+		       administrators.user_id IS NOT NULL,
+		       pending.id IS NOT NULL
+		FROM clubs
+		LEFT JOIN club_memberships AS memberships
+		  ON memberships.club_id = clubs.id AND memberships.user_id = $1
+		LEFT JOIN club_administrators AS administrators
+		  ON administrators.club_id = clubs.id AND administrators.user_id = $1
+		LEFT JOIN applications AS pending
+		  ON pending.club_id = clubs.id AND pending.user_id = $1 AND pending.status = 'pending'
+		WHERE clubs.status = 'active'
+		  AND (memberships.user_id IS NOT NULL OR administrators.user_id IS NOT NULL OR pending.id IS NOT NULL)
+		  AND ($2::timestamptz IS NULL OR clubs.created_at < $2 OR (clubs.created_at = $2 AND clubs.id > $3::uuid))
+		ORDER BY clubs.created_at DESC, clubs.id ASC
+		LIMIT $4`, userID, nullableTime(page.Cursor, cursorTime), cursorID, page.Limit+1)
 	if err != nil {
 		return profileResponse{}, err
 	}
 	defer rows.Close()
-	profile.Clubs = make([]clubSummary, 0)
+	states := make([]profileClubState, 0)
 	for rows.Next() {
-		var club clubSummary
-		if err := rows.Scan(&club.ID, &club.Name, &club.Description); err != nil {
+		var state profileClubState
+		if err := rows.Scan(&state.Club.ID, &state.Club.Name, &state.Club.Description, &state.Club.CreatedAt,
+			&state.IsMember, &state.IsAdmin, &state.HasPending); err != nil {
 			return profileResponse{}, err
 		}
-		profile.Clubs = append(profile.Clubs, club)
+		states = append(states, state)
 	}
 	if err := rows.Err(); err != nil {
 		return profileResponse{}, err
 	}
-	rows, err = db.QueryContext(ctx, `
-		SELECT administrators.club_id::text
-		FROM club_administrators AS administrators
-		JOIN clubs ON clubs.id = administrators.club_id
-		WHERE administrators.user_id = $1
-		  AND clubs.status = 'active'
-	ORDER BY administrators.club_id`, userID)
-	if err != nil {
-		return profileResponse{}, err
-	}
-	defer rows.Close()
+	pageResult := finishPage(states, page.Limit, func(state profileClubState) pageCursor {
+		return pageCursor{Key: state.Club.CreatedAt.Format(time.RFC3339Nano), ID: state.Club.ID}
+	})
+	profile.Clubs = make([]clubSummary, 0, len(pageResult.Items))
 	profile.AdministratorClubIDs = make([]string, 0)
-	for rows.Next() {
-		var clubID string
-		if err := rows.Scan(&clubID); err != nil {
-			return profileResponse{}, err
+	profile.PendingApplicationClubIDs = make([]string, 0)
+	for _, state := range pageResult.Items {
+		if state.IsMember {
+			profile.Clubs = append(profile.Clubs, state.Club)
 		}
-		profile.AdministratorClubIDs = append(profile.AdministratorClubIDs, clubID)
+		if state.IsAdmin {
+			profile.AdministratorClubIDs = append(profile.AdministratorClubIDs, state.Club.ID)
+		}
+		if state.HasPending {
+			profile.PendingApplicationClubIDs = append(profile.PendingApplicationClubIDs, state.Club.ID)
+		}
 	}
-	if err := rows.Err(); err != nil {
-		return profileResponse{}, err
-	}
+	profile.nextCursor = pageResult.NextCursor
 	return profile, nil
 }
 

@@ -52,7 +52,7 @@ type rowScanner interface {
 }
 
 func (h *HTTPHandler) applications(w http.ResponseWriter, r *http.Request) {
-	if r.URL.RawQuery != "" {
+	if r.Method == http.MethodPost && r.URL.RawQuery != "" {
 		writeError(w, http.StatusBadRequest, "query parameters are not supported")
 		return
 	}
@@ -93,8 +93,9 @@ func (h *HTTPHandler) application(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *HTTPHandler) listApplications(w http.ResponseWriter, r *http.Request) {
-	if r.URL.RawQuery != "" {
-		writeError(w, http.StatusBadRequest, "query parameters are not supported")
+	page, err := parsePaginationQuery(r.URL.RawQuery)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid pagination parameters")
 		return
 	}
 	if !allowSafeOrigin(w, r, h.service.TrustedOrigin()) {
@@ -108,12 +109,16 @@ func (h *HTTPHandler) listApplications(w http.ResponseWriter, r *http.Request) {
 		writeSessionError(w, err)
 		return
 	}
-	applications, err := readApplications(r.Context(), h.service.db, principal.UserID)
+	applications, err := readApplications(r.Context(), h.service.db, principal.UserID, page)
 	if err != nil {
+		if errors.Is(err, errInvalidPagination) {
+			writeError(w, http.StatusBadRequest, "invalid pagination parameters")
+			return
+		}
 		writeApplicationError(w, err)
 		return
 	}
-	writeJSON(w, applications)
+	writePage(w, applications)
 }
 
 func (h *HTTPHandler) readApplication(w http.ResponseWriter, r *http.Request, applicationID string) {
@@ -161,10 +166,10 @@ func (h *HTTPHandler) submitApplication(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var input applicationInput
-	if !decodeJSON(w, r, &input) {
+	if !decodeJSONWithLimit(w, r, &input, maxTextRequestBody) {
 		return
 	}
-	if !isUUID(input.ClubID) || strings.TrimSpace(input.Text) == "" {
+	if !isUUID(input.ClubID) || strings.TrimSpace(input.Text) == "" || !textWithinLimit(input.Text, maxTextLength) {
 		writeApplicationError(w, ErrInvalidInput)
 		return
 	}
@@ -250,7 +255,7 @@ func (h *HTTPHandler) clubMemberships(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *HTTPHandler) clubMemberCollection(w http.ResponseWriter, r *http.Request, clubID string) {
-	if r.URL.RawQuery != "" {
+	if r.Method != http.MethodGet && r.URL.RawQuery != "" {
 		writeError(w, http.StatusBadRequest, "query parameters are not supported")
 		return
 	}
@@ -265,6 +270,11 @@ func (h *HTTPHandler) clubMemberCollection(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *HTTPHandler) listClubMembers(w http.ResponseWriter, r *http.Request, clubID string) {
+	page, err := parsePaginationQuery(r.URL.RawQuery)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid pagination parameters")
+		return
+	}
 	if !allowSafeOrigin(w, r, h.service.TrustedOrigin()) {
 		return
 	}
@@ -276,12 +286,16 @@ func (h *HTTPHandler) listClubMembers(w http.ResponseWriter, r *http.Request, cl
 		writeSessionError(w, err)
 		return
 	}
-	members, err := readClubMembers(r.Context(), h.service.db, principal.UserID, clubID)
+	members, err := readClubMembers(r.Context(), h.service.db, principal.UserID, clubID, page)
 	if err != nil {
+		if errors.Is(err, errInvalidPagination) {
+			writeError(w, http.StatusBadRequest, "invalid pagination parameters")
+			return
+		}
 		writeApplicationError(w, err)
 		return
 	}
-	writeJSON(w, members)
+	writePage(w, members)
 }
 
 func (h *HTTPHandler) addClubMemberByLogin(w http.ResponseWriter, r *http.Request, clubID string) {
@@ -316,7 +330,7 @@ func (h *HTTPHandler) addClubMemberByLogin(w http.ResponseWriter, r *http.Reques
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func readClubMembers(ctx context.Context, db *sql.DB, actorID, clubID string) ([]clubMemberRecord, error) {
+func readClubMembers(ctx context.Context, db *sql.DB, actorID, clubID string, page pageRequest) (pageResult[clubMemberRecord], error) {
 	var authorized bool
 	if err := db.QueryRowContext(ctx, `
 		SELECT EXISTS (
@@ -327,10 +341,14 @@ func readClubMembers(ctx context.Context, db *sql.DB, actorID, clubID string) ([
 		    WHERE clubs.id = $1 AND clubs.status = 'active'
 		      AND administrators.user_id = $2 AND users.global_role = 'User'
 		)`, clubID, actorID).Scan(&authorized); err != nil {
-		return nil, err
+		return pageResult[clubMemberRecord]{}, err
 	}
 	if !authorized {
-		return nil, errApplicationNotFound
+		return pageResult[clubMemberRecord]{}, errApplicationNotFound
+	}
+	var cursorKey, cursorID any
+	if page.Cursor != nil {
+		cursorKey, cursorID = page.Cursor.Key, page.Cursor.ID
 	}
 	rows, err := db.QueryContext(ctx, `
 		SELECT memberships.user_id::text, users.login
@@ -346,23 +364,27 @@ func readClubMembers(ctx context.Context, db *sql.DB, actorID, clubID string) ([
 		        AND administrators.club_id = memberships.club_id
 		        AND actors.global_role = 'User'
 		  )
-		ORDER BY users.login, memberships.user_id`, clubID, actorID)
+		  AND ($3::text IS NULL OR (users.login, memberships.user_id) > ($3::text, $4::uuid))
+		ORDER BY users.login, memberships.user_id
+		LIMIT $5`, clubID, actorID, cursorKey, cursorID, page.Limit+1)
 	if err != nil {
-		return nil, err
+		return pageResult[clubMemberRecord]{}, err
 	}
 	defer rows.Close()
 	members := make([]clubMemberRecord, 0)
 	for rows.Next() {
 		var member clubMemberRecord
 		if err := rows.Scan(&member.UserID, &member.Login); err != nil {
-			return nil, err
+			return pageResult[clubMemberRecord]{}, err
 		}
 		members = append(members, member)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return pageResult[clubMemberRecord]{}, err
 	}
-	return members, nil
+	return finishPage(members, page.Limit, func(member clubMemberRecord) pageCursor {
+		return pageCursor{Key: member.Login, ID: member.UserID}
+	}), nil
 }
 
 func addClubMemberByLogin(ctx context.Context, db *sql.DB, actorID, clubID, login string) error {
@@ -388,14 +410,22 @@ func addClubMemberByLogin(ctx context.Context, db *sql.DB, actorID, clubID, logi
 	})
 }
 
-func readApplications(ctx context.Context, db *sql.DB, actorID string) ([]applicationRecord, error) {
+func readApplications(ctx context.Context, db *sql.DB, actorID string, page pageRequest) (pageResult[applicationRecord], error) {
+	cursorTime, err := parseTimeCursor(page.Cursor)
+	if err != nil {
+		return pageResult[applicationRecord]{}, err
+	}
+	var cursorID any
+	if page.Cursor != nil {
+		cursorID = page.Cursor.ID
+	}
 	rows, err := db.QueryContext(ctx, `
 		SELECT applications.id::text, applications.user_id::text, applications.club_id::text,
 		       applications.text, applications.status, applications.created_at,
 		       applications.administrator_id::text, applications.decided_at
 		FROM applications
 		JOIN clubs ON clubs.id = applications.club_id
-		WHERE applications.user_id = $1
+		WHERE (applications.user_id = $1
 		   OR (
 		       (SELECT global_role FROM users WHERE id = $1) = 'User'
 		       AND clubs.status = 'active'
@@ -404,24 +434,28 @@ func readApplications(ctx context.Context, db *sql.DB, actorID string) ([]applic
 		           WHERE administrators.user_id = $1
 		             AND administrators.club_id = applications.club_id
 		       )
-		   )
-	ORDER BY applications.created_at DESC, applications.id`, actorID)
+		   ))
+		  AND ($2::timestamptz IS NULL OR applications.created_at < $2 OR (applications.created_at = $2 AND applications.id > $3::uuid))
+		ORDER BY applications.created_at DESC, applications.id ASC
+		LIMIT $4`, actorID, nullableTime(page.Cursor, cursorTime), cursorID, page.Limit+1)
 	if err != nil {
-		return nil, err
+		return pageResult[applicationRecord]{}, err
 	}
 	defer rows.Close()
 	applications := make([]applicationRecord, 0)
 	for rows.Next() {
 		application, err := scanApplication(rows)
 		if err != nil {
-			return nil, err
+			return pageResult[applicationRecord]{}, err
 		}
 		applications = append(applications, application)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return pageResult[applicationRecord]{}, err
 	}
-	return applications, nil
+	return finishPage(applications, page.Limit, func(application applicationRecord) pageCursor {
+		return pageCursor{Key: application.CreatedAt.Format(time.RFC3339Nano), ID: application.ID}
+	}), nil
 }
 
 func readApplication(ctx context.Context, db *sql.DB, applicationID, actorID string) (applicationRecord, error) {

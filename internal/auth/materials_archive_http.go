@@ -22,13 +22,13 @@ type materialRecord struct {
 }
 
 func (h *HTTPHandler) clubRoutes(w http.ResponseWriter, r *http.Request) {
-	if r.URL.RawQuery != "" {
-		writeError(w, http.StatusBadRequest, "query parameters are not supported")
-		return
-	}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/clubs/"), "/")
 	switch {
 	case len(parts) == 1 && isUUID(parts[0]):
+		if r.URL.RawQuery != "" {
+			writeError(w, http.StatusBadRequest, "query parameters are not supported")
+			return
+		}
 		h.archiveClub(w, r, parts[0])
 	case len(parts) == 2 && isUUID(parts[0]) && parts[1] == "materials":
 		h.clubMaterials(w, r, parts[0])
@@ -42,7 +42,7 @@ func (h *HTTPHandler) clubRoutes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *HTTPHandler) clubMaterials(w http.ResponseWriter, r *http.Request, clubID string) {
-	if r.URL.RawQuery != "" {
+	if r.Method != http.MethodGet && r.URL.RawQuery != "" {
 		writeError(w, http.StatusBadRequest, "query parameters are not supported")
 		return
 	}
@@ -57,6 +57,11 @@ func (h *HTTPHandler) clubMaterials(w http.ResponseWriter, r *http.Request, club
 }
 
 func (h *HTTPHandler) listClubMaterials(w http.ResponseWriter, r *http.Request, clubID string) {
+	page, err := parsePaginationQuery(r.URL.RawQuery)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid pagination parameters")
+		return
+	}
 	if !allowSafeOrigin(w, r, h.service.TrustedOrigin()) {
 		return
 	}
@@ -68,12 +73,16 @@ func (h *HTTPHandler) listClubMaterials(w http.ResponseWriter, r *http.Request, 
 		writeSessionError(w, err)
 		return
 	}
-	materials, err := readClubMaterials(r.Context(), h.service.db, principal.UserID, clubID)
+	materials, err := readClubMaterials(r.Context(), h.service.db, principal.UserID, clubID, page)
 	if err != nil {
+		if errors.Is(err, errInvalidPagination) {
+			writeError(w, http.StatusBadRequest, "invalid pagination parameters")
+			return
+		}
 		writeApplicationError(w, err)
 		return
 	}
-	writeJSON(w, materials)
+	writePage(w, materials)
 }
 
 func (h *HTTPHandler) createClubMaterial(w http.ResponseWriter, r *http.Request, clubID string) {
@@ -93,10 +102,10 @@ func (h *HTTPHandler) createClubMaterial(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	var input materialInput
-	if !decodeJSON(w, r, &input) {
+	if !decodeJSONWithLimit(w, r, &input, maxTextRequestBody) {
 		return
 	}
-	if strings.TrimSpace(input.Content) == "" {
+	if strings.TrimSpace(input.Content) == "" || !textWithinLimit(input.Content, maxTextLength) {
 		writeApplicationError(w, ErrInvalidInput)
 		return
 	}
@@ -166,10 +175,10 @@ func (h *HTTPHandler) updateMaterial(w http.ResponseWriter, r *http.Request, mat
 		return
 	}
 	var input materialInput
-	if !decodeJSON(w, r, &input) {
+	if !decodeJSONWithLimit(w, r, &input, maxTextRequestBody) {
 		return
 	}
-	if strings.TrimSpace(input.Content) == "" {
+	if strings.TrimSpace(input.Content) == "" || !textWithinLimit(input.Content, maxTextLength) {
 		writeApplicationError(w, ErrInvalidInput)
 		return
 	}
@@ -212,7 +221,15 @@ func (h *HTTPHandler) archiveClub(w http.ResponseWriter, r *http.Request, clubID
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func readClubMaterials(ctx context.Context, db *sql.DB, actorID, clubID string) ([]materialRecord, error) {
+func readClubMaterials(ctx context.Context, db *sql.DB, actorID, clubID string, page pageRequest) (pageResult[materialRecord], error) {
+	cursorTime, err := parseTimeCursor(page.Cursor)
+	if err != nil {
+		return pageResult[materialRecord]{}, err
+	}
+	var cursorID any
+	if page.Cursor != nil {
+		cursorID = page.Cursor.ID
+	}
 	rows, err := db.QueryContext(ctx, `
 		SELECT materials.id::text, materials.club_id::text, materials.content,
 		       materials.created_at, materials.updated_at
@@ -224,9 +241,11 @@ func readClubMaterials(ctx context.Context, db *sql.DB, actorID, clubID string) 
 		      SELECT 1 FROM club_memberships AS memberships
 		      WHERE memberships.user_id = $2 AND memberships.club_id = materials.club_id
 		  )
-		ORDER BY materials.created_at DESC, materials.id`, clubID, actorID)
+		  AND ($3::timestamptz IS NULL OR materials.created_at < $3 OR (materials.created_at = $3 AND materials.id > $4::uuid))
+		ORDER BY materials.created_at DESC, materials.id ASC
+		LIMIT $5`, clubID, actorID, nullableTime(page.Cursor, cursorTime), cursorID, page.Limit+1)
 	if err != nil {
-		return nil, err
+		return pageResult[materialRecord]{}, err
 	}
 	defer rows.Close()
 	materials := make([]materialRecord, 0)
@@ -234,14 +253,16 @@ func readClubMaterials(ctx context.Context, db *sql.DB, actorID, clubID string) 
 		var material materialRecord
 		if err := rows.Scan(&material.ID, &material.ClubID, &material.Content,
 			&material.CreatedAt, &material.UpdatedAt); err != nil {
-			return nil, err
+			return pageResult[materialRecord]{}, err
 		}
 		materials = append(materials, material)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return pageResult[materialRecord]{}, err
 	}
-	return materials, nil
+	return finishPage(materials, page.Limit, func(material materialRecord) pageCursor {
+		return pageCursor{Key: material.CreatedAt.Format(time.RFC3339Nano), ID: material.ID}
+	}), nil
 }
 
 func readMaterial(ctx context.Context, db *sql.DB, actorID, materialID string) (materialRecord, error) {

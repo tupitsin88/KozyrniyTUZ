@@ -2,41 +2,48 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
 const (
-	defaultPort              = "8080"
-	defaultDBMaxOpenConns    = 20
-	defaultDBMaxIdleConns    = 5
-	defaultDBConnMaxLifetime = 30 * time.Minute
-	defaultDBConnMaxIdleTime = 5 * time.Minute
-	defaultTrustedOrigin     = "http://localhost:8080"
-	defaultSessionIdle       = 30 * time.Minute
-	defaultSessionAbsolute   = 12 * time.Hour
-	defaultArgonMemory       = uint32(19 * 1024)
-	defaultArgonIterations   = uint32(2)
-	defaultArgonParallelism  = uint8(1)
+	defaultPort               = "8080"
+	defaultListenHost         = "127.0.0.1"
+	defaultDBMaxOpenConns     = 20
+	defaultDBMaxIdleConns     = 5
+	defaultDBConnMaxLifetime  = 30 * time.Minute
+	defaultDBConnMaxIdleTime  = 5 * time.Minute
+	defaultTrustedOrigin      = "http://localhost:8080"
+	defaultSessionIdle        = 30 * time.Minute
+	defaultSessionAbsolute    = 12 * time.Hour
+	defaultArgonMemory        = uint32(19 * 1024)
+	defaultArgonIterations    = uint32(2)
+	defaultArgonParallelism   = uint8(1)
+	defaultArgonMaxConcurrent = 2
 )
 
 type Config struct {
-	Port              string
-	DatabaseURL       string
-	DBMaxOpenConns    int
-	DBMaxIdleConns    int
-	DBConnMaxLifetime time.Duration
-	DBConnMaxIdleTime time.Duration
-	TrustedOrigin     string
-	BootstrapLogin    string
-	BootstrapPassword string
-	SessionIdle       time.Duration
-	SessionAbsolute   time.Duration
-	ArgonMemory       uint32
-	ArgonIterations   uint32
-	ArgonParallelism  uint8
+	Port               string
+	ListenHost         string
+	DatabaseURL        string
+	DBMaxOpenConns     int
+	DBMaxIdleConns     int
+	DBConnMaxLifetime  time.Duration
+	DBConnMaxIdleTime  time.Duration
+	TrustedOrigin      string
+	BootstrapLogin     string
+	BootstrapPassword  string
+	SessionIdle        time.Duration
+	SessionAbsolute    time.Duration
+	ArgonMemory        uint32
+	ArgonIterations    uint32
+	ArgonParallelism   uint8
+	ArgonMaxConcurrent int
+	TrustedProxyCIDRs  []netip.Prefix
 }
 
 func Load() (Config, error) {
@@ -44,6 +51,10 @@ func Load() (Config, error) {
 	portNumber, err := strconv.Atoi(port)
 	if err != nil || portNumber < 1 || portNumber > 65535 {
 		return Config{}, fmt.Errorf("PORT must be a number between 1 and 65535")
+	}
+	listenHost := envOrDefault("LISTEN_HOST", defaultListenHost)
+	if _, err := netip.ParseAddr(listenHost); err != nil {
+		return Config{}, fmt.Errorf("LISTEN_HOST must be an IP address")
 	}
 
 	databaseURL := os.Getenv("DATABASE_URL")
@@ -87,23 +98,50 @@ func Load() (Config, error) {
 	if err != nil || argonParallelism < 1 || argonParallelism > 4 {
 		return Config{}, fmt.Errorf("ARGON2_PARALLELISM must be between 1 and 4")
 	}
+	argonMaxConcurrent, err := intEnvOrDefault("ARGON2_MAX_CONCURRENT", defaultArgonMaxConcurrent)
+	if err != nil || argonMaxConcurrent < 1 || argonMaxConcurrent > 4 {
+		return Config{}, fmt.Errorf("ARGON2_MAX_CONCURRENT must be between 1 and 4")
+	}
+	trustedProxyCIDRs, err := parseCIDRList(os.Getenv("TRUSTED_PROXY_CIDRS"))
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
-		Port:              port,
-		DatabaseURL:       databaseURL,
-		DBMaxOpenConns:    maxOpen,
-		DBMaxIdleConns:    maxIdle,
-		DBConnMaxLifetime: defaultDBConnMaxLifetime,
-		DBConnMaxIdleTime: defaultDBConnMaxIdleTime,
-		TrustedOrigin:     trustedOrigin,
-		BootstrapLogin:    os.Getenv("BOOTSTRAP_SUPERUSER_LOGIN"),
-		BootstrapPassword: os.Getenv("BOOTSTRAP_SUPERUSER_PASSWORD"),
-		SessionIdle:       sessionIdle,
-		SessionAbsolute:   sessionAbsolute,
-		ArgonMemory:       argonMemory,
-		ArgonIterations:   argonIterations,
-		ArgonParallelism:  argonParallelism,
+		Port:               port,
+		ListenHost:         listenHost,
+		DatabaseURL:        databaseURL,
+		DBMaxOpenConns:     maxOpen,
+		DBMaxIdleConns:     maxIdle,
+		DBConnMaxLifetime:  defaultDBConnMaxLifetime,
+		DBConnMaxIdleTime:  defaultDBConnMaxIdleTime,
+		TrustedOrigin:      trustedOrigin,
+		BootstrapLogin:     os.Getenv("BOOTSTRAP_SUPERUSER_LOGIN"),
+		BootstrapPassword:  os.Getenv("BOOTSTRAP_SUPERUSER_PASSWORD"),
+		SessionIdle:        sessionIdle,
+		SessionAbsolute:    sessionAbsolute,
+		ArgonMemory:        argonMemory,
+		ArgonIterations:    argonIterations,
+		ArgonParallelism:   argonParallelism,
+		ArgonMaxConcurrent: argonMaxConcurrent,
+		TrustedProxyCIDRs:  trustedProxyCIDRs,
 	}, nil
+}
+
+func parseCIDRList(value string) ([]netip.Prefix, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	parts := strings.Split(value, ",")
+	prefixes := make([]netip.Prefix, 0, len(parts))
+	for _, part := range parts {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(part))
+		if err != nil || prefix.Bits() == 0 {
+			return nil, fmt.Errorf("TRUSTED_PROXY_CIDRS must contain valid CIDR ranges")
+		}
+		prefixes = append(prefixes, prefix.Masked())
+	}
+	return prefixes, nil
 }
 
 func envOrDefault(name, fallback string) string {

@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres-version: ["15", "18"]
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres-version }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: club_membership_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d club_membership_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Build frontend
+        run: npm ci && npm run build
+
+      - name: Run Go tests with PostgreSQL integration enabled
+        run: go test ./...
+        env:
+          AUTH_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/club_membership_test?sslmode=disable
+
+      - name: Run Go vet
+        run: go vet ./...
+
+      - name: Build server
+        run: go build ./cmd/server
+
+      - name: Install Chromium for browser checks
+        if: matrix.postgres-version == '15'
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser end-to-end checks
+        if: matrix.postgres-version == '15'
+        run: npm run test:e2e
+        env:
+          E2E_DATABASE_URL: postgres://postgres:postgres@localhost:5432/club_membership_test?sslmode=disable

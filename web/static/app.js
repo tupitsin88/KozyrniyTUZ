@@ -19,6 +19,8 @@ let csrfToken = "";
 let profile = null;
 let clubs = [];
 let applications = [];
+let clubsNextCursor = null;
+let applicationsNextCursor = null;
 let currentView = "clubs";
 let selectedClubID = "";
 let authMode = "login";
@@ -50,6 +52,75 @@ async function request(path, method = "GET", data) {
     }
     return payload;
 }
+async function requestPage(path, cursor = null) {
+    const url = new URL(path, window.location.origin);
+    url.searchParams.set("limit", "50");
+    if (cursor)
+        url.searchParams.set("cursor", cursor);
+    const response = await fetch(url, { credentials: "same-origin", headers: { Accept: "application/json" } });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+        const errorText = isRecord(payload) && typeof payload.error === "string" ? payload.error : "Не удалось выполнить запрос.";
+        throw new ApiError(response.status, userMessage(response.status, errorText));
+    }
+    if (!Array.isArray(payload))
+        throw new Error("Сервер вернул неверный формат списка.");
+    return { items: payload, nextCursor: response.headers.get("X-Next-Cursor") };
+}
+async function requestProfile() {
+    let cursor = null;
+    let result = null;
+    do {
+        const url = new URL("/api/profile", window.location.origin);
+        url.searchParams.set("limit", "50");
+        if (cursor)
+            url.searchParams.set("cursor", cursor);
+        const response = await fetch(url, { credentials: "same-origin", headers: { Accept: "application/json" } });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) {
+            const errorText = isRecord(payload) && typeof payload.error === "string" ? payload.error : "Не удалось выполнить запрос.";
+            throw new ApiError(response.status, userMessage(response.status, errorText));
+        }
+        if (!isRecord(payload) || !Array.isArray(payload.clubs) || !Array.isArray(payload.administrator_club_ids) || !Array.isArray(payload.pending_application_club_ids)) {
+            throw new Error("Сервер вернул неверный формат профиля.");
+        }
+        if (!result)
+            result = payload;
+        else {
+            result.clubs.push(...payload.clubs);
+            result.administrator_club_ids.push(...payload.administrator_club_ids);
+            result.pending_application_club_ids.push(...payload.pending_application_club_ids);
+        }
+        cursor = response.headers.get("X-Next-Cursor");
+    } while (cursor);
+    if (!result)
+        throw new Error("Не удалось загрузить профиль.");
+    return result;
+}
+function addLoadMoreControl(container, path, cursor, appendItems, updateCursor) {
+    if (!cursor)
+        return;
+    let nextCursor = cursor;
+    const button = element("button", "button secondary", "Показать ещё");
+    button.type = "button";
+    button.addEventListener("click", async () => {
+        button.disabled = true;
+        try {
+            const page = await requestPage(path, nextCursor);
+            updateCursor?.(page.nextCursor);
+            appendItems(page.items);
+            if (page.nextCursor)
+                nextCursor = page.nextCursor;
+            else
+                button.remove();
+        }
+        catch (error) {
+            showNotice(errorText(error), true);
+            button.disabled = false;
+        }
+    });
+    container.append(button);
+}
 function isRecord(value) {
     return typeof value === "object" && value !== null;
 }
@@ -79,13 +150,15 @@ function showNotice(message, isError = false) {
 }
 async function loadDashboard() {
     const [newProfile, newClubs, newApplications] = await Promise.all([
-        request("/api/profile"),
-        request("/api/clubs"),
-        request("/api/applications"),
+        requestProfile(),
+        requestPage("/api/clubs"),
+        requestPage("/api/applications"),
     ]);
     profile = newProfile;
-    clubs = newClubs;
-    applications = newApplications;
+    clubs = newClubs.items;
+    clubsNextCursor = newClubs.nextCursor;
+    applications = newApplications.items;
+    applicationsNextCursor = newApplications.nextCursor;
     render();
 }
 async function start() {
@@ -163,17 +236,27 @@ function renderAuth() {
     login.input.maxLength = 64;
     login.input.pattern = "[A-Za-z0-9._-]+";
     login.input.required = true;
-    const password = inputField("Пароль", "password", "password", authMode === "register" ? "Не короче 12 символов" : "Ваш пароль");
+    const password = inputField("Пароль", "password", "password", authMode === "register" ? "От 12 до 1024 байт" : "Пароль от 12 до 1024 байт");
     password.input.autocomplete = authMode === "register" ? "new-password" : "current-password";
-    password.input.minLength = authMode === "register" ? 12 : 1;
     password.input.maxLength = 1024;
     password.input.required = true;
+    const validatePasswordLength = () => {
+        const byteLength = new TextEncoder().encode(password.input.value).length;
+        password.input.setCustomValidity(byteLength > 0 && (byteLength < 12 || byteLength > 1024)
+            ? "Пароль должен содержать от 12 до 1024 байт."
+            : "");
+    };
+    password.input.addEventListener("input", validatePasswordLength);
+    validatePasswordLength();
     form.append(login.wrapper, password.wrapper);
     const submit = element("button", "button", authMode === "register" ? "Создать аккаунт" : "Войти");
     submit.type = "submit";
     form.append(submit);
     form.addEventListener("submit", async (event) => {
         event.preventDefault();
+        validatePasswordLength();
+        if (!form.reportValidity())
+            return;
         submit.disabled = true;
         try {
             const result = await request(authMode === "register" ? "/api/register" : "/api/login", "POST", {
@@ -214,11 +297,22 @@ function textareaField(labelText, name, hintText = "") {
     const textarea = element("textarea");
     textarea.id = name;
     textarea.name = name;
-    textarea.maxLength = 16000;
+    setTextLengthLimit(textarea);
     wrapper.append(label, textarea);
     if (hintText)
         wrapper.append(element("span", "hint", hintText));
     return { wrapper, textarea };
+}
+function setTextLengthLimit(textarea) {
+    const maximumCharacters = 16000;
+    textarea.maxLength = maximumCharacters * 2;
+    const validateLength = () => {
+        textarea.setCustomValidity(Array.from(textarea.value).length > maximumCharacters
+            ? `Не больше ${maximumCharacters} символов.`
+            : "");
+    };
+    textarea.addEventListener("input", validateLength);
+    validateLength();
 }
 function renderNavigation() {
     const nav = element("nav", "top-nav");
@@ -242,7 +336,8 @@ function renderClubs() {
         renderCreateClubForm();
     const head = element("div", "section-head");
     head.append(element("h2", "section-title", "Доступные клубы"));
-    head.append(element("span", "subtle", `${clubs.length} ${clubs.length === 1 ? "клуб" : "клубов"}`));
+    const count = element("span", "subtle", `${clubs.length} ${clubs.length === 1 ? "клуб" : "клубов"}`);
+    head.append(count);
     app.append(head);
     if (clubs.length === 0) {
         app.append(emptyState("Здесь пока пусто", "Создайте клуб или загляните сюда позже."));
@@ -252,6 +347,12 @@ function renderClubs() {
     for (const club of clubs)
         grid.append(renderClubCard(club));
     app.append(grid);
+    addLoadMoreControl(app, "/api/clubs", clubsNextCursor, (items) => {
+        clubs.push(...items);
+        for (const club of items)
+            grid.append(renderClubCard(club));
+        count.textContent = `${clubs.length} ${clubs.length === 1 ? "клуб" : "клубов"}`;
+    }, (cursor) => { clubsNextCursor = cursor; });
 }
 function renderCreateClubForm() {
     const details = element("details", "panel");
@@ -291,7 +392,7 @@ function renderClubCard(club) {
     card.append(element("p", "club-description", club.description || "Описание пока не добавили."));
     const member = profile?.clubs.some((item) => item.id === club.id) ?? false;
     const administrator = profile?.administrator_club_ids.includes(club.id) ?? false;
-    const ownPending = applications.some((item) => item.club_id === club.id && item.user_id === profile?.id && item.status === "pending");
+    const ownPending = profile?.pending_application_club_ids.includes(club.id) ?? false;
     const badges = element("div", "club-meta");
     if (member)
         badges.append(element("span", "badge", "Вы участник"));
@@ -360,6 +461,10 @@ function renderApplications() {
     app.append(element("p", "lede", "Здесь видны статусы заявок, которые вы отправили в клубы."));
     if (own.length === 0) {
         app.append(emptyState("Заявок пока нет", "Откройте список клубов и отправьте заявку в интересующий вас клуб."));
+        addLoadMoreControl(app, "/api/applications", applicationsNextCursor, (items) => {
+            applications.push(...items);
+            render();
+        }, (cursor) => { applicationsNextCursor = cursor; });
         return;
     }
     const list = element("div", "stack");
@@ -375,6 +480,20 @@ function renderApplications() {
         list.append(row);
     }
     app.append(list);
+    addLoadMoreControl(app, "/api/applications", applicationsNextCursor, (items) => {
+        applications.push(...items);
+        for (const item of items.filter((entry) => entry.user_id === profile?.id)) {
+            const row = element("article", "application-row");
+            const club = clubs.find((entry) => entry.id === item.club_id);
+            const head = element("div", "row-head");
+            head.append(element("h3", "", club?.name ?? "Клуб больше не активен"));
+            head.append(statusBadge(item.status));
+            row.append(head);
+            row.append(element("p", "row-note", formatDate(item.created_at)));
+            row.append(element("p", "row-copy", item.text));
+            list.append(row);
+        }
+    }, (cursor) => { applicationsNextCursor = cursor; });
 }
 function statusBadge(status) {
     const labels = { pending: "На рассмотрении", approved: "Одобрена", rejected: "Отклонена" };
@@ -393,16 +512,21 @@ async function renderMaterials() {
     const loading = emptyState("Загружаем материалы", "");
     app.append(loading);
     try {
-        const materials = await request(`/api/clubs/${encodeURIComponent(club.id)}/materials`);
+        const path = `/api/clubs/${encodeURIComponent(club.id)}/materials`;
+        const page = await requestPage(path);
         if (currentView !== "materials" || selectedClubID !== club.id)
             return;
         loading.remove();
-        if (materials.length === 0)
+        if (page.items.length === 0)
             app.append(emptyState("Материалов пока нет", "Администратор клуба сможет добавить их позже."));
         const list = element("div", "stack");
-        for (const material of materials)
+        for (const material of page.items)
             list.append(renderMaterialRow(material, false));
         app.append(list);
+        addLoadMoreControl(app, path, page.nextCursor, (items) => {
+            for (const material of items)
+                list.append(renderMaterialRow(material, false));
+        });
     }
     catch (error) {
         loading.replaceChildren(element("strong", "", "Не удалось открыть материалы"), element("span", "", errorText(error)));
@@ -427,27 +551,37 @@ async function renderManagement() {
     for (const item of applicationsForClub)
         requests.append(renderAdminApplication(item, club));
     app.append(requests);
+    addLoadMoreControl(app, "/api/applications", applicationsNextCursor, (items) => {
+        applications.push(...items);
+        for (const item of items.filter((entry) => entry.club_id === club.id))
+            requests.append(renderAdminApplication(item, club));
+    }, (cursor) => { applicationsNextCursor = cursor; });
     app.append(element("h2", "section-title", "Участники"));
     const memberLoading = emptyState("Загружаем список", "");
     app.append(memberLoading);
     try {
-        const members = await request(`/api/clubs/${encodeURIComponent(club.id)}/members`);
+        const path = `/api/clubs/${encodeURIComponent(club.id)}/members`;
+        const page = await requestPage(path);
         if (currentView !== "manage" || selectedClubID !== club.id)
             return;
         memberLoading.remove();
         renderAddMemberForm(club);
-        if (members.length === 0)
+        if (page.items.length === 0)
             app.append(emptyState("Пока нет участников", ""));
         const memberList = element("div", "stack");
-        for (const member of members) {
-            const row = element("article", "member-row");
-            const identity = element("div");
-            identity.append(element("span", "member-login", member.login));
-            row.append(identity);
-            row.append(actionButton("Убрать", "button small danger", () => void removeMember(club, member)));
-            memberList.append(row);
-        }
+        const appendMembers = (members) => {
+            for (const member of members) {
+                const row = element("article", "member-row");
+                const identity = element("div");
+                identity.append(element("span", "member-login", member.login));
+                row.append(identity);
+                row.append(actionButton("Убрать", "button small danger", () => void removeMember(club, member)));
+                memberList.append(row);
+            }
+        };
+        appendMembers(page.items);
         app.append(memberList);
+        addLoadMoreControl(app, path, page.nextCursor, appendMembers);
     }
     catch (error) {
         memberLoading.replaceChildren(element("strong", "", "Не удалось загрузить участников"), element("span", "", errorText(error)));
@@ -507,7 +641,7 @@ function renderMaterialRow(material, editable) {
     const form = element("form", "form-grid");
     const content = element("textarea", "material-editor");
     content.value = material.content;
-    content.maxLength = 16000;
+    setTextLengthLimit(content);
     content.setAttribute("aria-label", "Содержимое материала");
     form.append(content);
     const save = element("button", "button small", "Сохранить изменения");
@@ -562,17 +696,22 @@ async function renderManagementMaterials(club) {
     section.append(loading);
     app.append(section);
     try {
-        const materials = await request(`/api/clubs/${encodeURIComponent(club.id)}/materials`);
+        const path = `/api/clubs/${encodeURIComponent(club.id)}/materials`;
+        const page = await requestPage(path);
         if (currentView !== "manage" || selectedClubID !== club.id)
             return;
         loading.remove();
         renderCreateMaterialForm(club);
-        if (materials.length === 0)
+        if (page.items.length === 0)
             section.append(emptyState("Материалов пока нет", "Добавьте первый материал клуба."));
         const list = element("div", "stack");
-        for (const material of materials)
+        for (const material of page.items)
             list.append(renderMaterialRow(material, true));
         section.append(list);
+        addLoadMoreControl(section, path, page.nextCursor, (items) => {
+            for (const material of items)
+                list.append(renderMaterialRow(material, true));
+        });
     }
     catch (error) {
         loading.replaceChildren(element("strong", "", "Не удалось загрузить материалы"), element("span", "", errorText(error)));

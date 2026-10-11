@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -37,6 +38,52 @@ func TestRegistrationRequiresTrustedOriginAndStrictJSON(t *testing.T) {
 				t.Fatalf("status = %d, want %d; body=%s", response.Code, testCase.status, response.Body.String())
 			}
 		})
+	}
+}
+
+func TestTextLengthLimitsCountUnicodeCodePoints(t *testing.T) {
+	if !textWithinLimit(strings.Repeat("😀", maxTextLength), maxTextLength) {
+		t.Fatal("maximum-length Unicode text was rejected")
+	}
+	if textWithinLimit(strings.Repeat("я", maxTextLength+1), maxTextLength) {
+		t.Fatal("text exceeding the code-point limit was accepted")
+	}
+	if !textWithinLimit(strings.Repeat("К", maxClubNameLength), maxClubNameLength) {
+		t.Fatal("maximum-length club name was rejected")
+	}
+	if textWithinLimit(strings.Repeat("К", maxClubNameLength+1), maxClubNameLength) {
+		t.Fatal("club name exceeding the code-point limit was accepted")
+	}
+}
+
+func TestDecodeJSONAcceptsMaximumUnicodeText(t *testing.T) {
+	type input struct {
+		Text string `json:"text"`
+	}
+	body, err := json.Marshal(input{Text: strings.Repeat("😀", maxTextLength)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(string(body)))
+	response := httptest.NewRecorder()
+	var decoded input
+	if !decodeJSONWithLimit(response, request, &decoded, maxTextRequestBody) {
+		t.Fatalf("maximum-length Unicode JSON was rejected: %s", response.Body.String())
+	}
+	if !textWithinLimit(decoded.Text, maxTextLength) {
+		t.Fatal("decoded text exceeds the configured code-point limit")
+	}
+}
+
+func TestDecodeJSONRejectsOversizedBody(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(strings.Repeat("a", maxRequestBody+1)))
+	response := httptest.NewRecorder()
+	var decoded map[string]string
+	if decodeJSON(response, request, &decoded) {
+		t.Fatal("request body larger than the configured limit was accepted")
+	}
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
 	}
 }
 

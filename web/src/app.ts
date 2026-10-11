@@ -1,10 +1,12 @@
 type SessionResponse = { authenticated: boolean; csrf_token: string };
+type Page<T> = { items: T[]; nextCursor: string | null };
 type Profile = {
   id: string;
   login: string;
   global_role: "User" | "SuperUser";
   clubs: Club[];
   administrator_club_ids: string[];
+  pending_application_club_ids: string[];
 };
 type Club = { id: string; name: string; description: string };
 type Application = {
@@ -48,6 +50,8 @@ let csrfToken = "";
 let profile: Profile | null = null;
 let clubs: Club[] = [];
 let applications: Application[] = [];
+let clubsNextCursor: string | null = null;
+let applicationsNextCursor: string | null = null;
 let currentView: View = "clubs";
 let selectedClubID = "";
 let authMode: AuthMode = "login";
@@ -83,6 +87,75 @@ async function request<T>(path: string, method = "GET", data?: unknown): Promise
   return payload as T;
 }
 
+async function requestPage<T>(path: string, cursor: string | null = null): Promise<Page<T>> {
+  const url = new URL(path, window.location.origin);
+  url.searchParams.set("limit", "50");
+  if (cursor) url.searchParams.set("cursor", cursor);
+  const response = await fetch(url, { credentials: "same-origin", headers: { Accept: "application/json" } });
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const errorText = isRecord(payload) && typeof payload.error === "string" ? payload.error : "Не удалось выполнить запрос.";
+    throw new ApiError(response.status, userMessage(response.status, errorText));
+  }
+  if (!Array.isArray(payload)) throw new Error("Сервер вернул неверный формат списка.");
+  return { items: payload as T[], nextCursor: response.headers.get("X-Next-Cursor") };
+}
+
+async function requestProfile(): Promise<Profile> {
+  let cursor: string | null = null;
+  let result: Profile | null = null;
+  do {
+    const url = new URL("/api/profile", window.location.origin);
+    url.searchParams.set("limit", "50");
+    if (cursor) url.searchParams.set("cursor", cursor);
+    const response = await fetch(url, { credentials: "same-origin", headers: { Accept: "application/json" } });
+    const payload: unknown = await response.json().catch(() => null);
+    if (!response.ok) {
+      const errorText = isRecord(payload) && typeof payload.error === "string" ? payload.error : "Не удалось выполнить запрос.";
+      throw new ApiError(response.status, userMessage(response.status, errorText));
+    }
+    if (!isRecord(payload) || !Array.isArray(payload.clubs) || !Array.isArray(payload.administrator_club_ids) || !Array.isArray(payload.pending_application_club_ids)) {
+      throw new Error("Сервер вернул неверный формат профиля.");
+    }
+    if (!result) result = payload as Profile;
+    else {
+      result.clubs.push(...payload.clubs as Club[]);
+      result.administrator_club_ids.push(...payload.administrator_club_ids as string[]);
+      result.pending_application_club_ids.push(...payload.pending_application_club_ids as string[]);
+    }
+    cursor = response.headers.get("X-Next-Cursor");
+  } while (cursor);
+  if (!result) throw new Error("Не удалось загрузить профиль.");
+  return result;
+}
+
+function addLoadMoreControl<T>(
+  container: HTMLElement,
+  path: string,
+  cursor: string | null,
+  appendItems: (items: T[]) => void,
+  updateCursor?: (cursor: string | null) => void,
+): void {
+  if (!cursor) return;
+  let nextCursor = cursor;
+  const button = element("button", "button secondary", "Показать ещё");
+  button.type = "button";
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      const page = await requestPage<T>(path, nextCursor);
+      updateCursor?.(page.nextCursor);
+      appendItems(page.items);
+      if (page.nextCursor) nextCursor = page.nextCursor;
+      else button.remove();
+    } catch (error) {
+      showNotice(errorText(error), true);
+      button.disabled = false;
+    }
+  });
+  container.append(button);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -108,13 +181,15 @@ function showNotice(message: string, isError = false): void {
 
 async function loadDashboard(): Promise<void> {
   const [newProfile, newClubs, newApplications] = await Promise.all([
-    request<Profile>("/api/profile"),
-    request<Club[]>("/api/clubs"),
-    request<Application[]>("/api/applications"),
+    requestProfile(),
+    requestPage<Club>("/api/clubs"),
+    requestPage<Application>("/api/applications"),
   ]);
   profile = newProfile;
-  clubs = newClubs;
-  applications = newApplications;
+  clubs = newClubs.items;
+  clubsNextCursor = newClubs.nextCursor;
+  applications = newApplications.items;
+  applicationsNextCursor = newApplications.nextCursor;
   render();
 }
 
@@ -190,17 +265,26 @@ function renderAuth(): void {
   login.input.maxLength = 64;
   login.input.pattern = "[A-Za-z0-9._-]+";
   login.input.required = true;
-  const password = inputField("Пароль", "password", "password", authMode === "register" ? "Не короче 12 символов" : "Ваш пароль");
+  const password = inputField("Пароль", "password", "password", authMode === "register" ? "От 12 до 1024 байт" : "Пароль от 12 до 1024 байт");
   password.input.autocomplete = authMode === "register" ? "new-password" : "current-password";
-  password.input.minLength = authMode === "register" ? 12 : 1;
   password.input.maxLength = 1024;
   password.input.required = true;
+  const validatePasswordLength = () => {
+    const byteLength = new TextEncoder().encode(password.input.value).length;
+    password.input.setCustomValidity(byteLength > 0 && (byteLength < 12 || byteLength > 1024)
+      ? "Пароль должен содержать от 12 до 1024 байт."
+      : "");
+  };
+  password.input.addEventListener("input", validatePasswordLength);
+  validatePasswordLength();
   form.append(login.wrapper, password.wrapper);
   const submit = element("button", "button", authMode === "register" ? "Создать аккаунт" : "Войти");
   submit.type = "submit";
   form.append(submit);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    validatePasswordLength();
+    if (!form.reportValidity()) return;
     submit.disabled = true;
     try {
       const result = await request<SessionResponse>(authMode === "register" ? "/api/register" : "/api/login", "POST", {
@@ -241,10 +325,22 @@ function textareaField(labelText: string, name: string, hintText = ""): { wrappe
   const textarea = element("textarea");
   textarea.id = name;
   textarea.name = name;
-  textarea.maxLength = 16000;
+  setTextLengthLimit(textarea);
   wrapper.append(label, textarea);
   if (hintText) wrapper.append(element("span", "hint", hintText));
   return { wrapper, textarea };
+}
+
+function setTextLengthLimit(textarea: HTMLTextAreaElement): void {
+  const maximumCharacters = 16000;
+  textarea.maxLength = maximumCharacters * 2;
+  const validateLength = () => {
+    textarea.setCustomValidity(Array.from(textarea.value).length > maximumCharacters
+      ? `Не больше ${maximumCharacters} символов.`
+      : "");
+  };
+  textarea.addEventListener("input", validateLength);
+  validateLength();
 }
 
 function renderNavigation(): void {
@@ -270,7 +366,8 @@ function renderClubs(): void {
 
   const head = element("div", "section-head");
   head.append(element("h2", "section-title", "Доступные клубы"));
-  head.append(element("span", "subtle", `${clubs.length} ${clubs.length === 1 ? "клуб" : "клубов"}`));
+  const count = element("span", "subtle", `${clubs.length} ${clubs.length === 1 ? "клуб" : "клубов"}`);
+  head.append(count);
   app.append(head);
   if (clubs.length === 0) {
     app.append(emptyState("Здесь пока пусто", "Создайте клуб или загляните сюда позже."));
@@ -279,6 +376,11 @@ function renderClubs(): void {
   const grid = element("div", "club-grid");
   for (const club of clubs) grid.append(renderClubCard(club));
   app.append(grid);
+  addLoadMoreControl<Club>(app, "/api/clubs", clubsNextCursor, (items) => {
+    clubs.push(...items);
+    for (const club of items) grid.append(renderClubCard(club));
+    count.textContent = `${clubs.length} ${clubs.length === 1 ? "клуб" : "клубов"}`;
+  }, (cursor) => { clubsNextCursor = cursor; });
 }
 
 function renderCreateClubForm(): void {
@@ -319,7 +421,7 @@ function renderClubCard(club: Club): HTMLElement {
   card.append(element("p", "club-description", club.description || "Описание пока не добавили."));
   const member = profile?.clubs.some((item) => item.id === club.id) ?? false;
   const administrator = profile?.administrator_club_ids.includes(club.id) ?? false;
-  const ownPending = applications.some((item) => item.club_id === club.id && item.user_id === profile?.id && item.status === "pending");
+  const ownPending = profile?.pending_application_club_ids.includes(club.id) ?? false;
   const badges = element("div", "club-meta");
   if (member) badges.append(element("span", "badge", "Вы участник"));
   if (administrator) badges.append(element("span", "badge", "Администратор"));
@@ -387,6 +489,10 @@ function renderApplications(): void {
   app.append(element("p", "lede", "Здесь видны статусы заявок, которые вы отправили в клубы."));
   if (own.length === 0) {
     app.append(emptyState("Заявок пока нет", "Откройте список клубов и отправьте заявку в интересующий вас клуб."));
+    addLoadMoreControl<Application>(app, "/api/applications", applicationsNextCursor, (items) => {
+      applications.push(...items);
+      render();
+    }, (cursor) => { applicationsNextCursor = cursor; });
     return;
   }
   const list = element("div", "stack");
@@ -402,6 +508,20 @@ function renderApplications(): void {
     list.append(row);
   }
   app.append(list);
+  addLoadMoreControl<Application>(app, "/api/applications", applicationsNextCursor, (items) => {
+    applications.push(...items);
+    for (const item of items.filter((entry) => entry.user_id === profile?.id)) {
+      const row = element("article", "application-row");
+      const club = clubs.find((entry) => entry.id === item.club_id);
+      const head = element("div", "row-head");
+      head.append(element("h3", "", club?.name ?? "Клуб больше не активен"));
+      head.append(statusBadge(item.status));
+      row.append(head);
+      row.append(element("p", "row-note", formatDate(item.created_at)));
+      row.append(element("p", "row-copy", item.text));
+      list.append(row);
+    }
+  }, (cursor) => { applicationsNextCursor = cursor; });
 }
 
 function statusBadge(status: Application["status"]): HTMLElement {
@@ -418,13 +538,17 @@ async function renderMaterials(): Promise<void> {
   const loading = emptyState("Загружаем материалы", "");
   app.append(loading);
   try {
-    const materials = await request<Material[]>(`/api/clubs/${encodeURIComponent(club.id)}/materials`);
+    const path = `/api/clubs/${encodeURIComponent(club.id)}/materials`;
+    const page = await requestPage<Material>(path);
     if (currentView !== "materials" || selectedClubID !== club.id) return;
     loading.remove();
-    if (materials.length === 0) app.append(emptyState("Материалов пока нет", "Администратор клуба сможет добавить их позже."));
+    if (page.items.length === 0) app.append(emptyState("Материалов пока нет", "Администратор клуба сможет добавить их позже."));
     const list = element("div", "stack");
-    for (const material of materials) list.append(renderMaterialRow(material, false));
+    for (const material of page.items) list.append(renderMaterialRow(material, false));
     app.append(list);
+    addLoadMoreControl<Material>(app, path, page.nextCursor, (items) => {
+      for (const material of items) list.append(renderMaterialRow(material, false));
+    });
   } catch (error) {
     loading.replaceChildren(element("strong", "", "Не удалось открыть материалы"), element("span", "", errorText(error)));
   }
@@ -443,26 +567,35 @@ async function renderManagement(): Promise<void> {
   const requests = element("div", "stack");
   for (const item of applicationsForClub) requests.append(renderAdminApplication(item, club));
   app.append(requests);
+  addLoadMoreControl<Application>(app, "/api/applications", applicationsNextCursor, (items) => {
+    applications.push(...items);
+    for (const item of items.filter((entry) => entry.club_id === club.id)) requests.append(renderAdminApplication(item, club));
+  }, (cursor) => { applicationsNextCursor = cursor; });
 
   app.append(element("h2", "section-title", "Участники"));
   const memberLoading = emptyState("Загружаем список", "");
   app.append(memberLoading);
   try {
-    const members = await request<Member[]>(`/api/clubs/${encodeURIComponent(club.id)}/members`);
+    const path = `/api/clubs/${encodeURIComponent(club.id)}/members`;
+    const page = await requestPage<Member>(path);
     if (currentView !== "manage" || selectedClubID !== club.id) return;
     memberLoading.remove();
     renderAddMemberForm(club);
-    if (members.length === 0) app.append(emptyState("Пока нет участников", ""));
+    if (page.items.length === 0) app.append(emptyState("Пока нет участников", ""));
     const memberList = element("div", "stack");
-    for (const member of members) {
-      const row = element("article", "member-row");
-      const identity = element("div");
-      identity.append(element("span", "member-login", member.login));
-      row.append(identity);
-      row.append(actionButton("Убрать", "button small danger", () => void removeMember(club, member)));
-      memberList.append(row);
-    }
+    const appendMembers = (members: Member[]) => {
+      for (const member of members) {
+        const row = element("article", "member-row");
+        const identity = element("div");
+        identity.append(element("span", "member-login", member.login));
+        row.append(identity);
+        row.append(actionButton("Убрать", "button small danger", () => void removeMember(club, member)));
+        memberList.append(row);
+      }
+    };
+    appendMembers(page.items);
     app.append(memberList);
+    addLoadMoreControl<Member>(app, path, page.nextCursor, appendMembers);
   } catch (error) {
     memberLoading.replaceChildren(element("strong", "", "Не удалось загрузить участников"), element("span", "", errorText(error)));
   }
@@ -523,7 +656,7 @@ function renderMaterialRow(material: Material, editable: boolean): HTMLElement {
   const form = element("form", "form-grid");
   const content = element("textarea", "material-editor");
   content.value = material.content;
-  content.maxLength = 16000;
+  setTextLengthLimit(content);
   content.setAttribute("aria-label", "Содержимое материала");
   form.append(content);
   const save = element("button", "button small", "Сохранить изменения");
@@ -578,14 +711,18 @@ async function renderManagementMaterials(club: Club): Promise<void> {
   section.append(loading);
   app.append(section);
   try {
-    const materials = await request<Material[]>(`/api/clubs/${encodeURIComponent(club.id)}/materials`);
+    const path = `/api/clubs/${encodeURIComponent(club.id)}/materials`;
+    const page = await requestPage<Material>(path);
     if (currentView !== "manage" || selectedClubID !== club.id) return;
     loading.remove();
     renderCreateMaterialForm(club);
-    if (materials.length === 0) section.append(emptyState("Материалов пока нет", "Добавьте первый материал клуба."));
+    if (page.items.length === 0) section.append(emptyState("Материалов пока нет", "Добавьте первый материал клуба."));
     const list = element("div", "stack");
-    for (const material of materials) list.append(renderMaterialRow(material, true));
+    for (const material of page.items) list.append(renderMaterialRow(material, true));
     section.append(list);
+    addLoadMoreControl<Material>(section, path, page.nextCursor, (items) => {
+      for (const material of items) list.append(renderMaterialRow(material, true));
+    });
   } catch (error) {
     loading.replaceChildren(element("strong", "", "Не удалось загрузить материалы"), element("span", "", errorText(error)));
   }

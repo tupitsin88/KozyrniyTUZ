@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHealthz(t *testing.T) {
@@ -94,5 +96,34 @@ func TestFrontendRejectsUnsafeMethod(t *testing.T) {
 	}
 	if got := response.Header().Get("Allow"); got != "GET, HEAD" {
 		t.Fatalf("Allow = %q, want %q", got, "GET, HEAD")
+	}
+}
+
+func TestHTTPServerHasRequestLimits(t *testing.T) {
+	server := newHTTPServer(":8080", newHandler())
+	if server.ReadHeaderTimeout != 5*time.Second {
+		t.Errorf("ReadHeaderTimeout = %s, want 5s", server.ReadHeaderTimeout)
+	}
+	if server.ReadTimeout != 30*time.Second {
+		t.Errorf("ReadTimeout = %s, want 30s", server.ReadTimeout)
+	}
+	if server.WriteTimeout != 30*time.Second {
+		t.Errorf("WriteTimeout = %s, want 30s", server.WriteTimeout)
+	}
+	if server.IdleTimeout != 60*time.Second {
+		t.Errorf("IdleTimeout = %s, want 60s", server.IdleTimeout)
+	}
+	if server.MaxHeaderBytes != 16<<10 {
+		t.Errorf("MaxHeaderBytes = %d, want %d", server.MaxHeaderBytes, 16<<10)
+	}
+}
+
+func TestServeHTTPStopsWhenContextIsCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := serveHTTP(ctx, newHTTPServer("127.0.0.1:0", newHandler()))
+	if err != nil {
+		t.Fatalf("serveHTTP returned error during graceful shutdown: %v", err)
 	}
 }
