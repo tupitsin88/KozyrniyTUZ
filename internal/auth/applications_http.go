@@ -38,6 +38,15 @@ type applicationRecord struct {
 	DecidedAt       *time.Time `json:"decided_at"`
 }
 
+type clubMemberInput struct {
+	Login string `json:"login"`
+}
+
+type clubMemberRecord struct {
+	UserID string `json:"user_id"`
+	Login  string `json:"login"`
+}
+
 type rowScanner interface {
 	Scan(...any) error
 }
@@ -240,6 +249,145 @@ func (h *HTTPHandler) clubMemberships(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h *HTTPHandler) clubMemberCollection(w http.ResponseWriter, r *http.Request, clubID string) {
+	if r.URL.RawQuery != "" {
+		writeError(w, http.StatusBadRequest, "query parameters are not supported")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		h.listClubMembers(w, r, clubID)
+	case http.MethodPost:
+		h.addClubMemberByLogin(w, r, clubID)
+	default:
+		methodNotAllowed(w, "GET, POST")
+	}
+}
+
+func (h *HTTPHandler) listClubMembers(w http.ResponseWriter, r *http.Request, clubID string) {
+	if !allowSafeOrigin(w, r, h.service.TrustedOrigin()) {
+		return
+	}
+	principal, ok := h.authenticate(w, r)
+	if !ok {
+		return
+	}
+	if err := h.service.Touch(r.Context(), principal); err != nil {
+		writeSessionError(w, err)
+		return
+	}
+	members, err := readClubMembers(r.Context(), h.service.db, principal.UserID, clubID)
+	if err != nil {
+		writeApplicationError(w, err)
+		return
+	}
+	writeJSON(w, members)
+}
+
+func (h *HTTPHandler) addClubMemberByLogin(w http.ResponseWriter, r *http.Request, clubID string) {
+	if !h.requireOrigin(w, r) || !requireJSON(w, r) {
+		return
+	}
+	principal, ok := h.authenticate(w, r)
+	if !ok {
+		return
+	}
+	if !csrfMatches(r.Header.Get("X-CSRF-Token"), principal.CSRF) {
+		writeError(w, http.StatusForbidden, "CSRF validation failed")
+		return
+	}
+	if err := h.service.Touch(r.Context(), principal); err != nil {
+		writeSessionError(w, err)
+		return
+	}
+	var input clubMemberInput
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	login, err := normalizeLogin(strings.TrimSpace(input.Login))
+	if err != nil {
+		writeApplicationError(w, ErrInvalidInput)
+		return
+	}
+	if err := addClubMemberByLogin(r.Context(), h.service.db, principal.UserID, clubID, login); err != nil {
+		writeApplicationError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func readClubMembers(ctx context.Context, db *sql.DB, actorID, clubID string) ([]clubMemberRecord, error) {
+	var authorized bool
+	if err := db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+		    SELECT 1
+		    FROM clubs
+		    JOIN club_administrators AS administrators ON administrators.club_id = clubs.id
+		    JOIN users ON users.id = administrators.user_id
+		    WHERE clubs.id = $1 AND clubs.status = 'active'
+		      AND administrators.user_id = $2 AND users.global_role = 'User'
+		)`, clubID, actorID).Scan(&authorized); err != nil {
+		return nil, err
+	}
+	if !authorized {
+		return nil, errApplicationNotFound
+	}
+	rows, err := db.QueryContext(ctx, `
+		SELECT memberships.user_id::text, users.login
+		FROM club_memberships AS memberships
+		JOIN users ON users.id = memberships.user_id
+		JOIN clubs ON clubs.id = memberships.club_id
+		WHERE memberships.club_id = $1
+		  AND clubs.status = 'active'
+		  AND EXISTS (
+		      SELECT 1 FROM club_administrators AS administrators
+		      JOIN users AS actors ON actors.id = administrators.user_id
+		      WHERE administrators.user_id = $2
+		        AND administrators.club_id = memberships.club_id
+		        AND actors.global_role = 'User'
+		  )
+		ORDER BY users.login, memberships.user_id`, clubID, actorID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	members := make([]clubMemberRecord, 0)
+	for rows.Next() {
+		var member clubMemberRecord
+		if err := rows.Scan(&member.UserID, &member.Login); err != nil {
+			return nil, err
+		}
+		members = append(members, member)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return members, nil
+}
+
+func addClubMemberByLogin(ctx context.Context, db *sql.DB, actorID, clubID, login string) error {
+	return runReadCommitted(ctx, db, func(tx *sql.Tx) error {
+		if err := lockActiveClub(tx, clubID); err != nil {
+			return err
+		}
+		if err := lockAdministrator(tx, actorID, clubID, false); err != nil {
+			return err
+		}
+		var userID string
+		err := tx.QueryRowContext(ctx, "SELECT id::text FROM users WHERE login = $1", login).Scan(&userID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return errApplicationNotFound
+		}
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO club_memberships (user_id, club_id, created_at)
+			VALUES ($1, $2, now()) ON CONFLICT (user_id, club_id) DO NOTHING`, userID, clubID)
+		return err
+	})
+}
+
 func readApplications(ctx context.Context, db *sql.DB, actorID string) ([]applicationRecord, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT applications.id::text, applications.user_id::text, applications.club_id::text,
@@ -247,16 +395,16 @@ func readApplications(ctx context.Context, db *sql.DB, actorID string) ([]applic
 		       applications.administrator_id::text, applications.decided_at
 		FROM applications
 		JOIN clubs ON clubs.id = applications.club_id
-	WHERE applications.user_id = $1
-	   OR (
-	       (SELECT global_role FROM users WHERE id = $1) = 'User'
-	       AND clubs.status = 'active'
-	       AND EXISTS (
-	           SELECT 1 FROM club_administrators AS administrators
-	           WHERE administrators.user_id = $1
-	             AND administrators.club_id = applications.club_id
-	       )
-	   )
+		WHERE applications.user_id = $1
+		   OR (
+		       (SELECT global_role FROM users WHERE id = $1) = 'User'
+		       AND clubs.status = 'active'
+		       AND EXISTS (
+		           SELECT 1 FROM club_administrators AS administrators
+		           WHERE administrators.user_id = $1
+		             AND administrators.club_id = applications.club_id
+		       )
+		   )
 	ORDER BY applications.created_at DESC, applications.id`, actorID)
 	if err != nil {
 		return nil, err
@@ -282,20 +430,20 @@ func readApplication(ctx context.Context, db *sql.DB, applicationID, actorID str
 		       applications.text, applications.status, applications.created_at,
 		       applications.administrator_id::text, applications.decided_at
 		FROM applications
-	JOIN clubs ON clubs.id = applications.club_id
-	WHERE applications.id = $1
-	  AND (
-	      applications.user_id = $2
-	      OR (
-	          (SELECT global_role FROM users WHERE id = $2) = 'User'
-	          AND clubs.status = 'active'
-	          AND EXISTS (
-	              SELECT 1 FROM club_administrators AS administrators
-	              WHERE administrators.user_id = $2
-	                AND administrators.club_id = applications.club_id
-	          )
-	      )
-	  )`, applicationID, actorID)
+		JOIN clubs ON clubs.id = applications.club_id
+		WHERE applications.id = $1
+		  AND (
+		      applications.user_id = $2
+		      OR (
+		          (SELECT global_role FROM users WHERE id = $2) = 'User'
+		          AND clubs.status = 'active'
+		          AND EXISTS (
+		              SELECT 1 FROM club_administrators AS administrators
+		              WHERE administrators.user_id = $2
+		                AND administrators.club_id = applications.club_id
+		          )
+		      )
+		  )`, applicationID, actorID)
 	application, err := scanApplication(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return applicationRecord{}, errApplicationNotFound

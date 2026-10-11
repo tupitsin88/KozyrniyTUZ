@@ -44,6 +44,8 @@ func TestApplicationRoutesRejectUntrustedFiltersAndMalformedPaths(t *testing.T) 
 		{name: "material query override", method: http.MethodGet, target: "/api/materials/8a4af8cf-49cc-4e42-a5bb-01e73b1c5200?club_id=8a4af8cf-49cc-4e42-a5bb-01e73b1c5201", wantStatus: http.StatusBadRequest},
 		{name: "unsupported archive method", method: http.MethodPost, target: "/api/clubs/8a4af8cf-49cc-4e42-a5bb-01e73b1c5200", wantStatus: http.StatusMethodNotAllowed, wantAllow: http.MethodDelete},
 		{name: "unsupported material update method", method: http.MethodDelete, target: "/api/materials/8a4af8cf-49cc-4e42-a5bb-01e73b1c5200", wantStatus: http.StatusMethodNotAllowed, wantAllow: "GET, PUT"},
+		{name: "member list query override", method: http.MethodGet, target: "/api/clubs/8a4af8cf-49cc-4e42-a5bb-01e73b1c5200/members?user_id=8a4af8cf-49cc-4e42-a5bb-01e73b1c5201", wantStatus: http.StatusBadRequest},
+		{name: "unsupported member collection method", method: http.MethodDelete, target: "/api/clubs/8a4af8cf-49cc-4e42-a5bb-01e73b1c5200/members", wantStatus: http.StatusMethodNotAllowed, wantAllow: "GET, POST"},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {

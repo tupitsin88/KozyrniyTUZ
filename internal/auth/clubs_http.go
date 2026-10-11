@@ -28,9 +28,11 @@ type clubCreated struct {
 }
 
 type profileResponse struct {
-	ID    string        `json:"id"`
-	Login string        `json:"login"`
-	Clubs []clubSummary `json:"clubs"`
+	ID                   string        `json:"id"`
+	Login                string        `json:"login"`
+	GlobalRole           string        `json:"global_role"`
+	Clubs                []clubSummary `json:"clubs"`
+	AdministratorClubIDs []string      `json:"administrator_club_ids"`
 }
 
 func (h *HTTPHandler) clubs(w http.ResponseWriter, r *http.Request) {
@@ -181,8 +183,8 @@ func createClub(ctx context.Context, db *sql.DB, creatorID string, input clubInp
 func readProfile(ctx context.Context, db *sql.DB, userID string) (profileResponse, error) {
 	var profile profileResponse
 	if err := db.QueryRowContext(ctx,
-		"SELECT id::text, login FROM users WHERE id = $1", userID,
-	).Scan(&profile.ID, &profile.Login); err != nil {
+		"SELECT id::text, login, global_role FROM users WHERE id = $1", userID,
+	).Scan(&profile.ID, &profile.Login, &profile.GlobalRole); err != nil {
 		return profileResponse{}, err
 	}
 	rows, err := db.QueryContext(ctx, `
@@ -203,6 +205,28 @@ func readProfile(ctx context.Context, db *sql.DB, userID string) (profileRespons
 			return profileResponse{}, err
 		}
 		profile.Clubs = append(profile.Clubs, club)
+	}
+	if err := rows.Err(); err != nil {
+		return profileResponse{}, err
+	}
+	rows, err = db.QueryContext(ctx, `
+		SELECT administrators.club_id::text
+		FROM club_administrators AS administrators
+		JOIN clubs ON clubs.id = administrators.club_id
+		WHERE administrators.user_id = $1
+		  AND clubs.status = 'active'
+	ORDER BY administrators.club_id`, userID)
+	if err != nil {
+		return profileResponse{}, err
+	}
+	defer rows.Close()
+	profile.AdministratorClubIDs = make([]string, 0)
+	for rows.Next() {
+		var clubID string
+		if err := rows.Scan(&clubID); err != nil {
+			return profileResponse{}, err
+		}
+		profile.AdministratorClubIDs = append(profile.AdministratorClubIDs, clubID)
 	}
 	if err := rows.Err(); err != nil {
 		return profileResponse{}, err

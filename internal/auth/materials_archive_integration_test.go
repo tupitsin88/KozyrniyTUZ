@@ -82,6 +82,7 @@ func TestPostgresMaterialsAndArchiveLifecycle(t *testing.T) {
 	adminB := register("matadminb")
 	member := register("matmember")
 	outsider := register("matoutsider")
+	lateApplicant := register("matapplicant")
 	handler := NewHTTPHandler(service)
 	createClub := func(session applicationTestSession, name string) string {
 		t.Helper()
@@ -128,6 +129,24 @@ func TestPostgresMaterialsAndArchiveLifecycle(t *testing.T) {
 	if response := applicationAPIRequest(handler, service, &adminA, http.MethodPut,
 		"/api/clubs/"+clubA+"/members/"+member.userID, "", settings.TrustedOrigin, adminA.csrf); response.Code != http.StatusNoContent {
 		t.Fatalf("add club A member status = %d; body=%s", response.Code, response.Body.String())
+	}
+	memberList := applicationAPIRequest(handler, service, &adminA, http.MethodGet,
+		"/api/clubs/"+clubA+"/members", "", "", "")
+	if memberList.Code != http.StatusOK {
+		t.Fatalf("authorized club member list status = %d; body=%s", memberList.Code, memberList.Body.String())
+	}
+	var clubMembers []clubMemberRecord
+	if err := json.Unmarshal(memberList.Body.Bytes(), &clubMembers); err != nil {
+		t.Fatal(err)
+	}
+	if len(clubMembers) != 2 {
+		t.Fatalf("club member list count = %d, want 2: %#v", len(clubMembers), clubMembers)
+	}
+	for _, session := range []*applicationTestSession{&outsider, &adminB, &root} {
+		if response := applicationAPIRequest(handler, service, session, http.MethodGet,
+			"/api/clubs/"+clubA+"/members", "", "", ""); response.Code != http.StatusNotFound {
+			t.Fatalf("unauthorized club member list status = %d, want %d", response.Code, http.StatusNotFound)
+		}
 	}
 	if response := applicationAPIRequest(handler, service, &member, http.MethodPut,
 		"/api/clubs/"+clubB+"/members/"+member.userID, "", settings.TrustedOrigin, member.csrf); response.Code != http.StatusForbidden {
@@ -210,6 +229,25 @@ func TestPostgresMaterialsAndArchiveLifecycle(t *testing.T) {
 			t.Fatalf("nonmember received materials: %#v", list)
 		}
 	}
+	if response := applicationAPIRequest(handler, service, &adminA, http.MethodPost,
+		"/api/clubs/"+clubA+"/members", `{"login":" matoutsider "}`, settings.TrustedOrigin, adminA.csrf); response.Code != http.StatusNoContent {
+		t.Fatalf("authorized member addition by login status = %d; body=%s", response.Code, response.Body.String())
+	}
+	if response := applicationAPIRequest(handler, service, &adminA, http.MethodPost,
+		"/api/clubs/"+clubA+"/members", `{"login":"matoutsider"}`, settings.TrustedOrigin, adminA.csrf); response.Code != http.StatusNoContent {
+		t.Fatalf("idempotent member addition by login status = %d", response.Code)
+	}
+	if response := applicationAPIRequest(handler, service, &member, http.MethodPost,
+		"/api/clubs/"+clubA+"/members", `{"login":"matapplicant"}`, settings.TrustedOrigin, member.csrf); response.Code != http.StatusForbidden {
+		t.Fatalf("unauthorized addition by login status = %d", response.Code)
+	}
+	if response := applicationAPIRequest(handler, service, &adminA, http.MethodPost,
+		"/api/clubs/"+clubA+"/members", `{"login":"unknownuser"}`, settings.TrustedOrigin, adminA.csrf); response.Code != http.StatusNotFound {
+		t.Fatalf("unknown account addition status = %d", response.Code)
+	}
+	if response := readMaterial(outsider, material.ID); response.Code != http.StatusOK {
+		t.Fatalf("new member did not receive access to club materials: status=%d", response.Code)
+	}
 	if response := applicationAPIRequest(handler, service, &member, http.MethodGet,
 		"/api/clubs/"+clubA+"/materials", "", "http://attacker.example", ""); response.Code != http.StatusForbidden {
 		t.Fatalf("cross-origin material list status = %d", response.Code)
@@ -269,8 +307,8 @@ func TestPostgresMaterialsAndArchiveLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	archivedApplication := applicationAPIRequest(handler, service, &outsider, http.MethodPost,
-		"/api/applications", string(applicationBody), settings.TrustedOrigin, outsider.csrf)
+	archivedApplication := applicationAPIRequest(handler, service, &lateApplicant, http.MethodPost,
+		"/api/applications", string(applicationBody), settings.TrustedOrigin, lateApplicant.csrf)
 	if archivedApplication.Code != http.StatusCreated {
 		t.Fatalf("archive fixture application status = %d; body=%s", archivedApplication.Code, archivedApplication.Body.String())
 	}
@@ -315,7 +353,7 @@ func TestPostgresMaterialsAndArchiveLifecycle(t *testing.T) {
 	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM club_administrators WHERE club_id = $1", clubA).Scan(&keptAdministrators); err != nil {
 		t.Fatal(err)
 	}
-	if keptMaterials != 1 || keptMemberships != 2 || keptAdministrators != 1 {
+	if keptMaterials != 1 || keptMemberships != 3 || keptAdministrators != 1 {
 		t.Fatalf("archive removed related rows: materials=%d memberships=%d administrators=%d", keptMaterials, keptMemberships, keptAdministrators)
 	}
 	if response := readMaterial(member, material.ID); response.Code != http.StatusNotFound {
@@ -332,6 +370,10 @@ func TestPostgresMaterialsAndArchiveLifecycle(t *testing.T) {
 		if len(list) != 0 {
 			t.Fatalf("archived club material list is not empty: %#v", list)
 		}
+	}
+	if response := applicationAPIRequest(handler, service, &adminA, http.MethodGet,
+		"/api/clubs/"+clubA+"/members", "", "", ""); response.Code != http.StatusNotFound {
+		t.Fatalf("former administrator member list after archive status = %d", response.Code)
 	}
 	if response := createMaterial(adminA, clubA, "after archive"); response.Code != http.StatusConflict {
 		t.Fatalf("material creation after archive status = %d", response.Code)
@@ -353,7 +395,7 @@ func TestPostgresMaterialsAndArchiveLifecycle(t *testing.T) {
 	if applicationRows != 1 {
 		t.Fatalf("archive did not preserve application: count=%d", applicationRows)
 	}
-	if response := applicationAPIRequest(handler, service, &outsider, http.MethodGet,
+	if response := applicationAPIRequest(handler, service, &lateApplicant, http.MethodGet,
 		"/api/applications/"+savedApplication.ID, "", "", ""); response.Code != http.StatusOK {
 		t.Fatalf("owner could not read preserved application after archive: status=%d body=%s", response.Code, response.Body.String())
 	}
