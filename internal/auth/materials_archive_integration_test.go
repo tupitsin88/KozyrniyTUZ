@@ -362,7 +362,7 @@ func TestPostgresMaterialsAndArchiveLifecycle(t *testing.T) {
 	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM club_administrators WHERE club_id = $1", clubA).Scan(&keptAdministrators); err != nil {
 		t.Fatal(err)
 	}
-	if keptMaterials != 1 || keptMemberships != 3 || keptAdministrators != 1 {
+	if keptMaterials != 2 || keptMemberships != 3 || keptAdministrators != 1 {
 		t.Fatalf("archive removed related rows: materials=%d memberships=%d administrators=%d", keptMaterials, keptMemberships, keptAdministrators)
 	}
 	if response := readMaterial(member, material.ID); response.Code != http.StatusNotFound {

@@ -28,11 +28,11 @@ func (s *Service) CleanupExpiredSessions(ctx context.Context) (int64, error) {
 			    LIMIT $3
 			)`, sessionCleanupRetention.String(), s.idleTimeout.String(), sessionCleanupBatchSize)
 		if err != nil {
-			return total, fmt.Errorf("delete expired sessions")
+			return total, fmt.Errorf("delete expired sessions: %w", err)
 		}
 		deleted, err := result.RowsAffected()
 		if err != nil {
-			return total, fmt.Errorf("read deleted session count")
+			return total, fmt.Errorf("read deleted session count: %w", err)
 		}
 		total += deleted
 		if deleted < sessionCleanupBatchSize {

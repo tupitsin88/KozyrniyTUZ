@@ -198,6 +198,7 @@ func TestPostgresAuthenticationLifecycle(t *testing.T) {
 		t.Fatalf("absolute-expired session remained valid: %v", err)
 	}
 
+	cleanupNow := time.Now().UTC()
 	cleanupCandidates := []struct {
 		name      string
 		created   time.Time
@@ -206,11 +207,11 @@ func TestPostgresAuthenticationLifecycle(t *testing.T) {
 		revokedAt *time.Time
 		remove    bool
 	}{
-		{name: "revoked-old", created: time.Now().Add(-40 * 24 * time.Hour), lastSeen: time.Now().Add(-39 * 24 * time.Hour), expires: time.Now().Add(-39 * 24 * time.Hour), revokedAt: timePointer(time.Now().Add(-38 * 24 * time.Hour)), remove: true},
-		{name: "absolute-old", created: time.Now().Add(-40 * 24 * time.Hour), lastSeen: time.Now().Add(-39 * 24 * time.Hour), expires: time.Now().Add(-31 * 24 * time.Hour), remove: true},
-		{name: "idle-old", created: time.Now().Add(-40 * 24 * time.Hour), lastSeen: time.Now().Add(-31*24*time.Hour - time.Hour), expires: time.Now().Add(time.Hour), remove: true},
-		{name: "recent-revoked", created: time.Now().Add(-48 * time.Hour), lastSeen: time.Now().Add(-24 * time.Hour), expires: time.Now().Add(12 * time.Hour), revokedAt: timePointer(time.Now().Add(-12 * time.Hour))},
-		{name: "active", created: time.Now().Add(-time.Hour), lastSeen: time.Now(), expires: time.Now().Add(12 * time.Hour)},
+		{name: "revoked-old", created: cleanupNow.Add(-40 * 24 * time.Hour), lastSeen: cleanupNow.Add(-39*24*time.Hour - time.Second), expires: cleanupNow.Add(-39 * 24 * time.Hour), revokedAt: timePointer(cleanupNow.Add(-38 * 24 * time.Hour)), remove: true},
+		{name: "absolute-old", created: cleanupNow.Add(-40 * 24 * time.Hour), lastSeen: cleanupNow.Add(-39 * 24 * time.Hour), expires: cleanupNow.Add(-31 * 24 * time.Hour), remove: true},
+		{name: "idle-old", created: cleanupNow.Add(-40 * 24 * time.Hour), lastSeen: cleanupNow.Add(-31*24*time.Hour - time.Hour), expires: cleanupNow.Add(time.Hour), remove: true},
+		{name: "recent-revoked", created: cleanupNow.Add(-48 * time.Hour), lastSeen: cleanupNow.Add(-24 * time.Hour), expires: cleanupNow.Add(12 * time.Hour), revokedAt: timePointer(cleanupNow.Add(-12 * time.Hour))},
+		{name: "active", created: cleanupNow.Add(-time.Hour), lastSeen: cleanupNow, expires: cleanupNow.Add(12 * time.Hour)},
 	}
 	cleanupHashes := make(map[string][32]byte, len(cleanupCandidates))
 	cleanupCSRF := make([]byte, 32)

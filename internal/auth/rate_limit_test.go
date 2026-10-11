@@ -26,21 +26,24 @@ func TestSourceRateLimiterRefillsTokens(t *testing.T) {
 	}
 }
 
-func TestSourceRateLimiterBoundsStoredSources(t *testing.T) {
+func TestSourceRateLimiterUsesOverflowWhenSourceTableIsFull(t *testing.T) {
 	limiter := newSourceRateLimiter(1, time.Minute)
 	limiter.maxEntries = 1
 	now := time.Now()
 	if allowed, _ := limiter.allow("192.0.2.1", now); !allowed {
 		t.Fatal("initial source was rejected")
 	}
-	if allowed, _ := limiter.allow("192.0.2.2", now); allowed {
-		t.Fatal("new source was accepted while limiter state was full")
+	if allowed, _ := limiter.allow("192.0.2.2", now); !allowed {
+		t.Fatal("new source was rejected when the source table was full")
 	}
-	if allowed, _ := limiter.allow("192.0.2.2", now.Add(11*time.Minute)); !allowed {
-		t.Fatal("new source was rejected after stale state was removed")
+	if allowed, _ := limiter.allow("192.0.2.2", now); allowed {
+		t.Fatal("overflow bucket did not limit a repeated source")
 	}
 	if got := len(limiter.buckets); got != 1 {
 		t.Fatalf("stored source count = %d, want 1", got)
+	}
+	if allowed, _ := limiter.allow("192.0.2.2", now.Add(11*time.Minute)); !allowed {
+		t.Fatal("source was rejected after its overflow bucket became stale")
 	}
 }
 

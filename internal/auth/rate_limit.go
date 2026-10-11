@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"hash/maphash"
 	"math"
 	"net"
 	"net/http"
@@ -12,6 +13,8 @@ import (
 )
 
 const maxRateLimitEntries = 16384
+const overflowRateLimitBuckets = 256
+const rateLimitBucketRetention = 10 * time.Minute
 
 type sourceBucket struct {
 	tokens   float64
@@ -26,6 +29,8 @@ type sourceRateLimiter struct {
 	refillPerSecond float64
 	maxEntries      int
 	checks          uint64
+	seed            maphash.Seed
+	overflow        [overflowRateLimitBuckets]sourceBucket
 }
 
 func newSourceRateLimiter(capacity int, refillPeriod time.Duration) *sourceRateLimiter {
@@ -37,6 +42,7 @@ func newSourceRateLimiter(capacity int, refillPeriod time.Duration) *sourceRateL
 		capacity:        float64(capacity),
 		refillPerSecond: float64(capacity) / refillPeriod.Seconds(),
 		maxEntries:      maxRateLimitEntries,
+		seed:            maphash.MakeSeed(),
 	}
 }
 
@@ -53,27 +59,38 @@ func (limiter *sourceRateLimiter) allow(key string, now time.Time) (bool, time.D
 		if len(limiter.buckets) >= limiter.maxEntries {
 			limiter.removeStale(now)
 			if len(limiter.buckets) >= limiter.maxEntries {
-				return false, time.Minute
+				index := maphash.String(limiter.seed, key) % overflowRateLimitBuckets
+				bucket := limiter.overflow[index]
+				if bucket.lastSeen.IsZero() || !now.Before(bucket.lastSeen.Add(rateLimitBucketRetention)) {
+					bucket = sourceBucket{tokens: limiter.capacity, updated: now}
+				}
+				allowed, retryAfter := limiter.consume(&bucket, now)
+				limiter.overflow[index] = bucket
+				return allowed, retryAfter
 			}
 		}
 		bucket = sourceBucket{tokens: limiter.capacity, updated: now}
 	}
+	allowed, retryAfter := limiter.consume(&bucket, now)
+	limiter.buckets[key] = bucket
+	return allowed, retryAfter
+}
+
+func (limiter *sourceRateLimiter) consume(bucket *sourceBucket, now time.Time) (bool, time.Duration) {
 	if now.After(bucket.updated) {
 		bucket.tokens = math.Min(limiter.capacity, bucket.tokens+now.Sub(bucket.updated).Seconds()*limiter.refillPerSecond)
 		bucket.updated = now
 	}
 	bucket.lastSeen = now
 	if bucket.tokens < 1 {
-		limiter.buckets[key] = bucket
 		return false, time.Duration(math.Ceil((1 - bucket.tokens) / limiter.refillPerSecond * float64(time.Second)))
 	}
 	bucket.tokens--
-	limiter.buckets[key] = bucket
 	return true, 0
 }
 
 func (limiter *sourceRateLimiter) removeStale(now time.Time) {
-	cutoff := now.Add(-10 * time.Minute)
+	cutoff := now.Add(-rateLimitBucketRetention)
 	for key, bucket := range limiter.buckets {
 		if bucket.lastSeen.Before(cutoff) {
 			delete(limiter.buckets, key)
