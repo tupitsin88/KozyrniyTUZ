@@ -132,6 +132,9 @@ func run() error {
 	server := newHTTPServer(address, newHandler(auth.NewHTTPHandler(authService)))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	go authService.RunSessionCleanup(ctx, func(err error) {
+		log.Printf("session cleanup failed: %v", err)
+	})
 	return serveHTTP(ctx, server)
 }
 

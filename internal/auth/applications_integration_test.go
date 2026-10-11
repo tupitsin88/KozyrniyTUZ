@@ -240,6 +240,9 @@ func TestPostgresApplicationAndMembershipLifecycle(t *testing.T) {
 	if err := json.Unmarshal(adminList.Body.Bytes(), &adminApplications); err != nil {
 		t.Fatal(err)
 	}
+	assertCursorPagination(t, func(target string) *httptest.ResponseRecorder {
+		return applicationAPIRequest(handler, service, &adminA, http.MethodGet, target, "", "", "")
+	}, "/api/applications", func(application applicationRecord) string { return application.ID })
 	for _, application := range adminApplications {
 		if application.ID == clubBApplication.ID {
 			t.Fatal("club A administrator received club B application")

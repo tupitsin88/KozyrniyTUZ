@@ -15,9 +15,10 @@ type clubInput struct {
 }
 
 type clubSummary struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	CreatedAt   time.Time `json:"-"`
 }
 
 type clubCreated struct {
@@ -40,6 +41,10 @@ func (h *HTTPHandler) clubs(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		h.listClubs(w, r)
 	case http.MethodPost:
+		if r.URL.RawQuery != "" {
+			writeError(w, http.StatusBadRequest, "query parameters are not supported")
+			return
+		}
 		h.createClub(w, r)
 	default:
 		methodNotAllowed(w, "GET, POST")
@@ -47,12 +52,21 @@ func (h *HTTPHandler) clubs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *HTTPHandler) listClubs(w http.ResponseWriter, r *http.Request) {
-	clubs, err := readActiveClubs(r.Context(), h.service.db)
+	page, err := parsePaginationQuery(r.URL.RawQuery)
 	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid pagination parameters")
+		return
+	}
+	clubs, err := readActiveClubs(r.Context(), h.service.db, page)
+	if err != nil {
+		if errors.Is(err, errInvalidPagination) {
+			writeError(w, http.StatusBadRequest, "invalid pagination parameters")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "request failed")
 		return
 	}
-	writeJSON(w, clubs)
+	writePage(w, clubs)
 }
 
 func (h *HTTPHandler) createClub(w http.ResponseWriter, r *http.Request) {
@@ -126,28 +140,40 @@ func (h *HTTPHandler) profile(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, profile)
 }
 
-func readActiveClubs(ctx context.Context, db *sql.DB) ([]clubSummary, error) {
+func readActiveClubs(ctx context.Context, db *sql.DB, page pageRequest) (pageResult[clubSummary], error) {
+	cursorTime, err := parseTimeCursor(page.Cursor)
+	if err != nil {
+		return pageResult[clubSummary]{}, err
+	}
+	var cursorID any
+	if page.Cursor != nil {
+		cursorID = page.Cursor.ID
+	}
 	rows, err := db.QueryContext(ctx, `
-		SELECT id::text, name, description
+		SELECT id::text, name, description, created_at
 		FROM clubs
 		WHERE status = 'active'
-		ORDER BY created_at DESC, id`)
+		  AND ($1::timestamptz IS NULL OR created_at < $1 OR (created_at = $1 AND id > $2::uuid))
+		ORDER BY created_at DESC, id ASC
+		LIMIT $3`, nullableTime(page.Cursor, cursorTime), cursorID, page.Limit+1)
 	if err != nil {
-		return nil, err
+		return pageResult[clubSummary]{}, err
 	}
 	defer rows.Close()
 	clubs := make([]clubSummary, 0)
 	for rows.Next() {
 		var club clubSummary
-		if err := rows.Scan(&club.ID, &club.Name, &club.Description); err != nil {
-			return nil, err
+		if err := rows.Scan(&club.ID, &club.Name, &club.Description, &club.CreatedAt); err != nil {
+			return pageResult[clubSummary]{}, err
 		}
 		clubs = append(clubs, club)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return pageResult[clubSummary]{}, err
 	}
-	return clubs, nil
+	return finishPage(clubs, page.Limit, func(club clubSummary) pageCursor {
+		return pageCursor{Key: club.CreatedAt.Format(time.RFC3339Nano), ID: club.ID}
+	}), nil
 }
 
 func createClub(ctx context.Context, db *sql.DB, creatorID string, input clubInput) (clubCreated, error) {

@@ -19,6 +19,8 @@ let csrfToken = "";
 let profile = null;
 let clubs = [];
 let applications = [];
+let clubsNextCursor = null;
+let applicationsNextCursor = null;
 let currentView = "clubs";
 let selectedClubID = "";
 let authMode = "login";
@@ -50,6 +52,45 @@ async function request(path, method = "GET", data) {
     }
     return payload;
 }
+async function requestPage(path, cursor = null) {
+    const url = new URL(path, window.location.origin);
+    url.searchParams.set("limit", "50");
+    if (cursor)
+        url.searchParams.set("cursor", cursor);
+    const response = await fetch(url, { credentials: "same-origin", headers: { Accept: "application/json" } });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+        const errorText = isRecord(payload) && typeof payload.error === "string" ? payload.error : "Не удалось выполнить запрос.";
+        throw new ApiError(response.status, userMessage(response.status, errorText));
+    }
+    if (!Array.isArray(payload))
+        throw new Error("Сервер вернул неверный формат списка.");
+    return { items: payload, nextCursor: response.headers.get("X-Next-Cursor") };
+}
+function addLoadMoreControl(container, path, cursor, appendItems, updateCursor) {
+    if (!cursor)
+        return;
+    let nextCursor = cursor;
+    const button = element("button", "button secondary", "Показать ещё");
+    button.type = "button";
+    button.addEventListener("click", async () => {
+        button.disabled = true;
+        try {
+            const page = await requestPage(path, nextCursor);
+            updateCursor?.(page.nextCursor);
+            appendItems(page.items);
+            if (page.nextCursor)
+                nextCursor = page.nextCursor;
+            else
+                button.remove();
+        }
+        catch (error) {
+            showNotice(errorText(error), true);
+            button.disabled = false;
+        }
+    });
+    container.append(button);
+}
 function isRecord(value) {
     return typeof value === "object" && value !== null;
 }
@@ -80,12 +121,14 @@ function showNotice(message, isError = false) {
 async function loadDashboard() {
     const [newProfile, newClubs, newApplications] = await Promise.all([
         request("/api/profile"),
-        request("/api/clubs"),
-        request("/api/applications"),
+        requestPage("/api/clubs"),
+        requestPage("/api/applications"),
     ]);
     profile = newProfile;
-    clubs = newClubs;
-    applications = newApplications;
+    clubs = newClubs.items;
+    clubsNextCursor = newClubs.nextCursor;
+    applications = newApplications.items;
+    applicationsNextCursor = newApplications.nextCursor;
     render();
 }
 async function start() {
@@ -263,7 +306,8 @@ function renderClubs() {
         renderCreateClubForm();
     const head = element("div", "section-head");
     head.append(element("h2", "section-title", "Доступные клубы"));
-    head.append(element("span", "subtle", `${clubs.length} ${clubs.length === 1 ? "клуб" : "клубов"}`));
+    const count = element("span", "subtle", `${clubs.length} ${clubs.length === 1 ? "клуб" : "клубов"}`);
+    head.append(count);
     app.append(head);
     if (clubs.length === 0) {
         app.append(emptyState("Здесь пока пусто", "Создайте клуб или загляните сюда позже."));
@@ -273,6 +317,12 @@ function renderClubs() {
     for (const club of clubs)
         grid.append(renderClubCard(club));
     app.append(grid);
+    addLoadMoreControl(app, "/api/clubs", clubsNextCursor, (items) => {
+        clubs.push(...items);
+        for (const club of items)
+            grid.append(renderClubCard(club));
+        count.textContent = `${clubs.length} ${clubs.length === 1 ? "клуб" : "клубов"}`;
+    }, (cursor) => { clubsNextCursor = cursor; });
 }
 function renderCreateClubForm() {
     const details = element("details", "panel");
@@ -381,6 +431,10 @@ function renderApplications() {
     app.append(element("p", "lede", "Здесь видны статусы заявок, которые вы отправили в клубы."));
     if (own.length === 0) {
         app.append(emptyState("Заявок пока нет", "Откройте список клубов и отправьте заявку в интересующий вас клуб."));
+        addLoadMoreControl(app, "/api/applications", applicationsNextCursor, (items) => {
+            applications.push(...items);
+            render();
+        }, (cursor) => { applicationsNextCursor = cursor; });
         return;
     }
     const list = element("div", "stack");
@@ -396,6 +450,20 @@ function renderApplications() {
         list.append(row);
     }
     app.append(list);
+    addLoadMoreControl(app, "/api/applications", applicationsNextCursor, (items) => {
+        applications.push(...items);
+        for (const item of items.filter((entry) => entry.user_id === profile?.id)) {
+            const row = element("article", "application-row");
+            const club = clubs.find((entry) => entry.id === item.club_id);
+            const head = element("div", "row-head");
+            head.append(element("h3", "", club?.name ?? "Клуб больше не активен"));
+            head.append(statusBadge(item.status));
+            row.append(head);
+            row.append(element("p", "row-note", formatDate(item.created_at)));
+            row.append(element("p", "row-copy", item.text));
+            list.append(row);
+        }
+    }, (cursor) => { applicationsNextCursor = cursor; });
 }
 function statusBadge(status) {
     const labels = { pending: "На рассмотрении", approved: "Одобрена", rejected: "Отклонена" };
@@ -414,16 +482,21 @@ async function renderMaterials() {
     const loading = emptyState("Загружаем материалы", "");
     app.append(loading);
     try {
-        const materials = await request(`/api/clubs/${encodeURIComponent(club.id)}/materials`);
+        const path = `/api/clubs/${encodeURIComponent(club.id)}/materials`;
+        const page = await requestPage(path);
         if (currentView !== "materials" || selectedClubID !== club.id)
             return;
         loading.remove();
-        if (materials.length === 0)
+        if (page.items.length === 0)
             app.append(emptyState("Материалов пока нет", "Администратор клуба сможет добавить их позже."));
         const list = element("div", "stack");
-        for (const material of materials)
+        for (const material of page.items)
             list.append(renderMaterialRow(material, false));
         app.append(list);
+        addLoadMoreControl(app, path, page.nextCursor, (items) => {
+            for (const material of items)
+                list.append(renderMaterialRow(material, false));
+        });
     }
     catch (error) {
         loading.replaceChildren(element("strong", "", "Не удалось открыть материалы"), element("span", "", errorText(error)));
@@ -448,27 +521,37 @@ async function renderManagement() {
     for (const item of applicationsForClub)
         requests.append(renderAdminApplication(item, club));
     app.append(requests);
+    addLoadMoreControl(app, "/api/applications", applicationsNextCursor, (items) => {
+        applications.push(...items);
+        for (const item of items.filter((entry) => entry.club_id === club.id))
+            requests.append(renderAdminApplication(item, club));
+    }, (cursor) => { applicationsNextCursor = cursor; });
     app.append(element("h2", "section-title", "Участники"));
     const memberLoading = emptyState("Загружаем список", "");
     app.append(memberLoading);
     try {
-        const members = await request(`/api/clubs/${encodeURIComponent(club.id)}/members`);
+        const path = `/api/clubs/${encodeURIComponent(club.id)}/members`;
+        const page = await requestPage(path);
         if (currentView !== "manage" || selectedClubID !== club.id)
             return;
         memberLoading.remove();
         renderAddMemberForm(club);
-        if (members.length === 0)
+        if (page.items.length === 0)
             app.append(emptyState("Пока нет участников", ""));
         const memberList = element("div", "stack");
-        for (const member of members) {
-            const row = element("article", "member-row");
-            const identity = element("div");
-            identity.append(element("span", "member-login", member.login));
-            row.append(identity);
-            row.append(actionButton("Убрать", "button small danger", () => void removeMember(club, member)));
-            memberList.append(row);
-        }
+        const appendMembers = (members) => {
+            for (const member of members) {
+                const row = element("article", "member-row");
+                const identity = element("div");
+                identity.append(element("span", "member-login", member.login));
+                row.append(identity);
+                row.append(actionButton("Убрать", "button small danger", () => void removeMember(club, member)));
+                memberList.append(row);
+            }
+        };
+        appendMembers(page.items);
         app.append(memberList);
+        addLoadMoreControl(app, path, page.nextCursor, appendMembers);
     }
     catch (error) {
         memberLoading.replaceChildren(element("strong", "", "Не удалось загрузить участников"), element("span", "", errorText(error)));
@@ -583,17 +666,22 @@ async function renderManagementMaterials(club) {
     section.append(loading);
     app.append(section);
     try {
-        const materials = await request(`/api/clubs/${encodeURIComponent(club.id)}/materials`);
+        const path = `/api/clubs/${encodeURIComponent(club.id)}/materials`;
+        const page = await requestPage(path);
         if (currentView !== "manage" || selectedClubID !== club.id)
             return;
         loading.remove();
         renderCreateMaterialForm(club);
-        if (materials.length === 0)
+        if (page.items.length === 0)
             section.append(emptyState("Материалов пока нет", "Добавьте первый материал клуба."));
         const list = element("div", "stack");
-        for (const material of materials)
+        for (const material of page.items)
             list.append(renderMaterialRow(material, true));
         section.append(list);
+        addLoadMoreControl(section, path, page.nextCursor, (items) => {
+            for (const material of items)
+                list.append(renderMaterialRow(material, true));
+        });
     }
     catch (error) {
         loading.replaceChildren(element("strong", "", "Не удалось загрузить материалы"), element("span", "", errorText(error)));

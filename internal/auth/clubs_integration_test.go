@@ -172,6 +172,8 @@ func TestPostgresClubAndProfileLifecycle(t *testing.T) {
 	if secondClub.Description != "<script>alert(1)</script>" {
 		t.Fatalf("club description was changed: %q", secondClub.Description)
 	}
+	assertCursorPagination(t, func(target string) *httptest.ResponseRecorder { return get(target, "") }, "/api/clubs",
+		func(club map[string]any) string { return club["id"].(string) })
 
 	clubsResponse := get("/api/clubs", "")
 	if clubsResponse.Code != http.StatusOK {
