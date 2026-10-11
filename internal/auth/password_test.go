@@ -70,6 +70,18 @@ func TestNormalizeLoginAndValidatePassword(t *testing.T) {
 	if err := validatePassword("correct horse battery staple"); err != nil {
 		t.Fatalf("valid password was rejected: %v", err)
 	}
+	if err := validatePassword(strings.Repeat("я", 6)); err != nil {
+		t.Fatalf("password with exactly 12 UTF-8 bytes was rejected: %v", err)
+	}
+	if err := validatePassword(strings.Repeat("я", 5)); err == nil {
+		t.Fatal("password shorter than 12 UTF-8 bytes was accepted")
+	}
+	if err := validatePassword(strings.Repeat("😀", 256)); err != nil {
+		t.Fatalf("password with exactly 1024 UTF-8 bytes was rejected: %v", err)
+	}
+	if err := validatePassword(strings.Repeat("😀", 257)); err == nil {
+		t.Fatal("password longer than 1024 UTF-8 bytes was accepted")
+	}
 }
 
 func TestUpgradeParametersNeverReduceAnExistingParameter(t *testing.T) {

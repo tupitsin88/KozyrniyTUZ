@@ -163,17 +163,27 @@ function renderAuth() {
     login.input.maxLength = 64;
     login.input.pattern = "[A-Za-z0-9._-]+";
     login.input.required = true;
-    const password = inputField("Пароль", "password", "password", authMode === "register" ? "Не короче 12 символов" : "Ваш пароль");
+    const password = inputField("Пароль", "password", "password", authMode === "register" ? "От 12 до 1024 байт" : "Пароль от 12 до 1024 байт");
     password.input.autocomplete = authMode === "register" ? "new-password" : "current-password";
-    password.input.minLength = authMode === "register" ? 12 : 1;
     password.input.maxLength = 1024;
     password.input.required = true;
+    const validatePasswordLength = () => {
+        const byteLength = new TextEncoder().encode(password.input.value).length;
+        password.input.setCustomValidity(byteLength > 0 && (byteLength < 12 || byteLength > 1024)
+            ? "Пароль должен содержать от 12 до 1024 байт."
+            : "");
+    };
+    password.input.addEventListener("input", validatePasswordLength);
+    validatePasswordLength();
     form.append(login.wrapper, password.wrapper);
     const submit = element("button", "button", authMode === "register" ? "Создать аккаунт" : "Войти");
     submit.type = "submit";
     form.append(submit);
     form.addEventListener("submit", async (event) => {
         event.preventDefault();
+        validatePasswordLength();
+        if (!form.reportValidity())
+            return;
         submit.disabled = true;
         try {
             const result = await request(authMode === "register" ? "/api/register" : "/api/login", "POST", {
@@ -214,11 +224,22 @@ function textareaField(labelText, name, hintText = "") {
     const textarea = element("textarea");
     textarea.id = name;
     textarea.name = name;
-    textarea.maxLength = 16000;
+    setTextLengthLimit(textarea);
     wrapper.append(label, textarea);
     if (hintText)
         wrapper.append(element("span", "hint", hintText));
     return { wrapper, textarea };
+}
+function setTextLengthLimit(textarea) {
+    const maximumCharacters = 16000;
+    textarea.maxLength = maximumCharacters * 2;
+    const validateLength = () => {
+        textarea.setCustomValidity(Array.from(textarea.value).length > maximumCharacters
+            ? `Не больше ${maximumCharacters} символов.`
+            : "");
+    };
+    textarea.addEventListener("input", validateLength);
+    validateLength();
 }
 function renderNavigation() {
     const nav = element("nav", "top-nav");
@@ -507,7 +528,7 @@ function renderMaterialRow(material, editable) {
     const form = element("form", "form-grid");
     const content = element("textarea", "material-editor");
     content.value = material.content;
-    content.maxLength = 16000;
+    setTextLengthLimit(content);
     content.setAttribute("aria-label", "Содержимое материала");
     form.append(content);
     const save = element("button", "button small", "Сохранить изменения");

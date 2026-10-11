@@ -54,5 +54,6 @@ Go API подключается к PostgreSQL, применяет миграци
 - [Требования безопасности](SECURITY_REQUIREMENTS.md)
 - [Модель угроз](THREAT_MODEL.md)
 - [Проектные решения безопасности S04](SECURITY_DESIGN.md)
+- [Карта требований и проверок](VERIFICATION.md)
 - [Индивидуальный вклад](CONTRIBUTIONS.md)
 - [Использование генеративного ИИ](AI_USAGE.md)

@@ -8,9 +8,15 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"unicode/utf8"
 )
 
-const maxRequestBody = 16 * 1024
+const (
+	maxRequestBody     = 16 * 1024
+	maxTextRequestBody = 128 * 1024
+	maxTextLength      = 16_000
+	maxClubNameLength  = 160
+)
 
 type HTTPHandler struct {
 	service *Service
@@ -205,7 +211,11 @@ func requireJSON(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, destination any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+	return decodeJSONWithLimit(w, r, destination, maxRequestBody)
+}
+
+func decodeJSONWithLimit(w http.ResponseWriter, r *http.Request, destination any, limit int64) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {
@@ -218,6 +228,10 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, destination any) bool {
 		return false
 	}
 	return true
+}
+
+func textWithinLimit(value string, maxRunes int) bool {
+	return utf8.RuneCountInString(value) <= maxRunes
 }
 
 func (h *HTTPHandler) setSessionCookie(w http.ResponseWriter, raw []byte) {

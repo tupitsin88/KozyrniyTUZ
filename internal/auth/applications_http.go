@@ -161,10 +161,10 @@ func (h *HTTPHandler) submitApplication(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var input applicationInput
-	if !decodeJSON(w, r, &input) {
+	if !decodeJSONWithLimit(w, r, &input, maxTextRequestBody) {
 		return
 	}
-	if !isUUID(input.ClubID) || strings.TrimSpace(input.Text) == "" {
+	if !isUUID(input.ClubID) || strings.TrimSpace(input.Text) == "" || !textWithinLimit(input.Text, maxTextLength) {
 		writeApplicationError(w, ErrInvalidInput)
 		return
 	}

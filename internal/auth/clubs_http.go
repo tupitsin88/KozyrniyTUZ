@@ -76,10 +76,10 @@ func (h *HTTPHandler) createClub(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input clubInput
-	if !decodeJSON(w, r, &input) {
+	if !decodeJSONWithLimit(w, r, &input, maxTextRequestBody) {
 		return
 	}
-	if strings.TrimSpace(input.Name) == "" {
+	if strings.TrimSpace(input.Name) == "" || !textWithinLimit(input.Name, maxClubNameLength) || !textWithinLimit(input.Description, maxTextLength) {
 		writeError(w, http.StatusBadRequest, "invalid club data")
 		return
 	}

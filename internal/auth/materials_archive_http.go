@@ -93,10 +93,10 @@ func (h *HTTPHandler) createClubMaterial(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	var input materialInput
-	if !decodeJSON(w, r, &input) {
+	if !decodeJSONWithLimit(w, r, &input, maxTextRequestBody) {
 		return
 	}
-	if strings.TrimSpace(input.Content) == "" {
+	if strings.TrimSpace(input.Content) == "" || !textWithinLimit(input.Content, maxTextLength) {
 		writeApplicationError(w, ErrInvalidInput)
 		return
 	}
@@ -166,10 +166,10 @@ func (h *HTTPHandler) updateMaterial(w http.ResponseWriter, r *http.Request, mat
 		return
 	}
 	var input materialInput
-	if !decodeJSON(w, r, &input) {
+	if !decodeJSONWithLimit(w, r, &input, maxTextRequestBody) {
 		return
 	}
-	if strings.TrimSpace(input.Content) == "" {
+	if strings.TrimSpace(input.Content) == "" || !textWithinLimit(input.Content, maxTextLength) {
 		writeApplicationError(w, ErrInvalidInput)
 		return
 	}

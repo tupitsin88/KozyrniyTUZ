@@ -24,6 +24,7 @@
 - `TestPostgresMaterialsAndArchiveLifecycle` проверяет гонку создания материала с архивированием.
 - Тесты `cmd/server` проверяют health endpoint, методы доступа к нему и выдачу встроенных файлов с заголовками безопасности.
 - Unit-тесты конфигурации и HTTP-обработчиков проверяют безопасные настройки, строгий JSON, Origin/CSRF и форматы идентификаторов.
+- `TestTextLengthLimitsCountUnicodeCodePoints`, `TestDecodeJSONAcceptsMaximumUnicodeText`, `TestDecodeJSONRejectsOversizedBody` и Unicode-границы в `TestNormalizeLoginAndValidatePassword` проверяют серверные пределы текста и пароля, приём 16 000 Unicode-символов и ограничение размера запроса.
 
 ## Известные пробелы автоматизации
 
@@ -44,3 +45,5 @@ go test ./...
 ```
 
 Для выполнения PostgreSQL-интеграционных тестов перед `go test ./...` задайте `AUTH_TEST_DATABASE_URL` на отдельную тестовую базу PostgreSQL. Не используйте для интеграционных тестов базу с нужными пользовательскими данными.
+
+В локальном запуске этой ветки `npm run build`, `go test ./...` и `go vet ./...` завершились успешно. `AUTH_TEST_DATABASE_URL` в окружении не была задана, поэтому PostgreSQL-интеграционные сценарии были пропущены; это не подтверждает подключение к реальному экземпляру PostgreSQL.
