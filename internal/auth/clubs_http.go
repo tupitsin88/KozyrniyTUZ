@@ -101,9 +101,7 @@ func (h *HTTPHandler) profile(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w, http.MethodGet)
 		return
 	}
-	origins := r.Header.Values("Origin")
-	if len(origins) > 1 || (len(origins) == 1 && origins[0] != h.service.TrustedOrigin()) {
-		writeError(w, http.StatusForbidden, "origin is not allowed")
+	if !allowSafeOrigin(w, r, h.service.TrustedOrigin()) {
 		return
 	}
 	principal, ok := h.authenticate(w, r)
