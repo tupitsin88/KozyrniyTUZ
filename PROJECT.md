@@ -173,7 +173,7 @@ Administrator — не отдельная глобальная роль, а до
 - хранилище: PostgreSQL;
 - взаимодействие клиента и сервера: HTTP и JSON.
 
-Внешние сервисы для текущей минимальной основы не нужны; PostgreSQL запускается локально. Полный сервер, клиент и база данных по плану будут запускаться локально.
+Внешние сервисы для текущей версии не нужны. Go API, собранный TypeScript-клиент и PostgreSQL запускаются локально.
 
 Текущая запускаемая основа:
 
@@ -183,7 +183,7 @@ Administrator — не отдельная глобальная роль, а до
 4. `GET /healthz` возвращает JSON со статусом `ok` и именем сервиса;
 5. регистрация и вход создают серверные сессии с Argon2id, cookie и CSRF-защитой; первый запуск пустой базы требует bootstrap SuperUser;
 6. `GET /api/clubs` возвращает активные клубы; User создаёт клуб одной транзакцией с выдачей себе Administrator и `club-member`;
-7. `GET /api/profile` возвращает профиль текущего пользователя и список его активных членств;
+7. `GET /api/profile` возвращает идентификатор, логин, глобальную роль, активные клубы, где пользователь Administrator, и его активные членства;
 8. User подаёт одну ожидающую заявку на клуб от своего имени; владелец и Administrator активного клуба видят только доступные им заявки;
 9. Administrator активного клуба однократно одобряет или отклоняет заявку; одобрение атомарно сохраняет решение и членство;
 10. Administrator активного клуба может добавить или удалить членство только в этом клубе;
@@ -196,29 +196,65 @@ Web-интерфейс для основных сценариев регистр
 
 ## 10. Локальный запуск
 
-Требуются Go `1.26` или совместимая версия и PostgreSQL `13` или новее. Для запуска создайте локальную базу данных и передайте API строку подключения в `DATABASE_URL`. Собранный TypeScript-интерфейс включён в Go-бинарник; Node.js нужен только для его изменения и пересборки.
+Требуются Go `1.26` или совместимая версия и PostgreSQL `13` или новее. Собранный TypeScript-интерфейс включён в Go-бинарник; Node.js нужен только для его изменения и пересборки. Ниже команды для PowerShell и локального PostgreSQL в Windows.
 
-1. В PowerShell задайте строку подключения к подготовленной локальной базе данных:
+1. Найдите `psql.exe`. Для стандартной установки PostgreSQL команда обычно находится в каталоге версии:
 
    ```powershell
-   $env:DATABASE_URL = "postgres://club_app:change-me@localhost:5432/club_membership?sslmode=disable"
+   $psql = Get-ChildItem -Path "C:\Program Files\PostgreSQL" -Filter psql.exe -File -Recurse -ErrorAction SilentlyContinue |
+     Select-Object -First 1
+   if (-not $psql) { throw "psql.exe не найден. Проверьте каталог установки PostgreSQL или используйте Query Tool в pgAdmin." }
+   $psql.FullName
+   ```
+
+   Если `psql.exe` не найден, в pgAdmin создайте login role `club_app` через раздел Login/Group Roles и задайте ему пароль во вкладке Definition. Затем откройте Query Tool базы `postgres` и выполните команды `CREATE DATABASE` из следующего шага; `\password` — команда клиента `psql`, её не нужно запускать в Query Tool.
+
+2. Подключитесь к локальному серверу PostgreSQL от имени пользователя `postgres`:
+
+   ```powershell
+   & $psql.FullName -h 127.0.0.1 -p 5432 -U postgres -d postgres
+   ```
+
+   В интерактивной консоли `psql` создайте отдельные базы приложения и тестов. Команда `\password` безопасно запросит пароль интерактивно, не помещая его в SQL-команду:
+
+   ```sql
+   CREATE ROLE club_app LOGIN;
+   \password club_app
+   CREATE DATABASE club_membership OWNER club_app;
+   CREATE DATABASE club_membership_test OWNER club_app;
+   ```
+
+   Если роль или базы уже существуют, повторно их создавать не нужно. Для подключения `postgres` потребуется пароль, заданный при установке PostgreSQL; пароль приложения будет отдельным.
+
+3. В PowerShell задайте строки подключения и пароль первой учётной записи SuperUser:
+
+   ```powershell
+   $env:DATABASE_URL = "postgres://club_app:<пароль>@127.0.0.1:5432/club_membership?sslmode=disable"
+   $env:AUTH_TEST_DATABASE_URL = "postgres://club_app:<пароль>@127.0.0.1:5432/club_membership_test?sslmode=disable"
    $env:BOOTSTRAP_SUPERUSER_LOGIN = "admin"
    $env:BOOTSTRAP_SUPERUSER_PASSWORD = "replace-with-a-private-password"
    ```
 
-   Замените пользователя, пароль, адрес и имя базы на значения своей установки PostgreSQL.
+   Замените пароль на заданный для `club_app`. Если он содержит символы, зарезервированные в URL, закодируйте их в percent-encoding. Используйте собственный пароль SuperUser.
    `PORT` необязателен и по умолчанию равен `8080`; размер пула задаётся переменными `DB_MAX_OPEN_CONNS` (по умолчанию `20`) и `DB_MAX_IDLE_CONNS` (по умолчанию `5`).
    При первом запуске на пустой базе задайте обе bootstrap-переменные. Для существующей базы ровно с одним SuperUser они не требуются и запись не меняется. Доверенный origin задаётся `TRUSTED_ORIGIN` (по умолчанию `http://localhost:8080`); idle- и absolute-timeout задаются `SESSION_IDLE_TIMEOUT` (по умолчанию `30m`) и `SESSION_ABSOLUTE_TIMEOUT` (по умолчанию `12h`). Параметры Argon2id задаются `ARGON2_MEMORY_KIB`, `ARGON2_ITERATIONS` и `ARGON2_PARALLELISM` (по умолчанию `19456`, `2`, `1`).
 
-2. В корне репозитория запустите проверку:
+4. Если интерфейс менялся, установите зависимости и соберите его. Сборка обновляет `web/static/app.js`, который встраивается в Go-сервер:
+
+   ```powershell
+   npm ci
+   npm run build
+   ```
+
+5. В корне репозитория запустите проверки:
 
    ```powershell
    go test ./...
    ```
 
-   Ожидаемый результат: пакет `cmd/server` проходит два теста health endpoint.
+   При заданной `AUTH_TEST_DATABASE_URL` выполняются также PostgreSQL-интеграционные сценарии в отдельной тестовой базе. Без этой переменной такие сценарии пропускаются, поэтому обычный успешный `go test ./...` сам по себе не подтверждает работу с PostgreSQL.
 
-3. Запустите API:
+6. Запустите API:
 
    ```powershell
    go run ./cmd/server
@@ -228,7 +264,7 @@ Web-интерфейс для основных сценариев регистр
 
    При старте API проверит соединение с PostgreSQL и применит ещё не выполненные миграции.
 
-4. В другом окне выполните:
+7. В другом окне выполните:
 
    ```powershell
    curl.exe http://localhost:8080/healthz
