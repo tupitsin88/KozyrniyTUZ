@@ -29,11 +29,20 @@ type clubCreated struct {
 }
 
 type profileResponse struct {
-	ID                   string        `json:"id"`
-	Login                string        `json:"login"`
-	GlobalRole           string        `json:"global_role"`
-	Clubs                []clubSummary `json:"clubs"`
-	AdministratorClubIDs []string      `json:"administrator_club_ids"`
+	ID                        string        `json:"id"`
+	Login                     string        `json:"login"`
+	GlobalRole                string        `json:"global_role"`
+	Clubs                     []clubSummary `json:"clubs"`
+	AdministratorClubIDs      []string      `json:"administrator_club_ids"`
+	PendingApplicationClubIDs []string      `json:"pending_application_club_ids"`
+	nextCursor                string        `json:"-"`
+}
+
+type profileClubState struct {
+	Club       clubSummary
+	IsMember   bool
+	IsAdmin    bool
+	HasPending bool
 }
 
 func (h *HTTPHandler) clubs(w http.ResponseWriter, r *http.Request) {
@@ -120,6 +129,11 @@ func (h *HTTPHandler) profile(w http.ResponseWriter, r *http.Request) {
 	if !allowSafeOrigin(w, r, h.service.TrustedOrigin()) {
 		return
 	}
+	page, err := parsePaginationQuery(r.URL.RawQuery)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid pagination parameters")
+		return
+	}
 	principal, ok := h.authenticate(w, r)
 	if !ok {
 		return
@@ -128,7 +142,7 @@ func (h *HTTPHandler) profile(w http.ResponseWriter, r *http.Request) {
 		writeSessionError(w, err)
 		return
 	}
-	profile, err := readProfile(r.Context(), h.service.db, principal.UserID)
+	profile, err := readProfile(r.Context(), h.service.db, principal.UserID, page)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusUnauthorized, "authentication required")
@@ -136,6 +150,9 @@ func (h *HTTPHandler) profile(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "request failed")
 		}
 		return
+	}
+	if profile.nextCursor != "" {
+		w.Header().Set("X-Next-Cursor", profile.nextCursor)
 	}
 	writeJSON(w, profile)
 }
@@ -206,57 +223,72 @@ func createClub(ctx context.Context, db *sql.DB, creatorID string, input clubInp
 	return created, nil
 }
 
-func readProfile(ctx context.Context, db *sql.DB, userID string) (profileResponse, error) {
+func readProfile(ctx context.Context, db *sql.DB, userID string, page pageRequest) (profileResponse, error) {
 	var profile profileResponse
 	if err := db.QueryRowContext(ctx,
 		"SELECT id::text, login, global_role FROM users WHERE id = $1", userID,
 	).Scan(&profile.ID, &profile.Login, &profile.GlobalRole); err != nil {
 		return profileResponse{}, err
 	}
+	cursorTime, err := parseTimeCursor(page.Cursor)
+	if err != nil {
+		return profileResponse{}, err
+	}
+	var cursorID any
+	if page.Cursor != nil {
+		cursorID = page.Cursor.ID
+	}
 	rows, err := db.QueryContext(ctx, `
-		SELECT clubs.id::text, clubs.name, clubs.description
-		FROM club_memberships AS memberships
-		JOIN clubs ON clubs.id = memberships.club_id
-		WHERE memberships.user_id = $1
-		  AND clubs.status = 'active'
-		ORDER BY clubs.created_at DESC, clubs.id`, userID)
+		SELECT clubs.id::text, clubs.name, clubs.description, clubs.created_at,
+		       memberships.user_id IS NOT NULL,
+		       administrators.user_id IS NOT NULL,
+		       pending.id IS NOT NULL
+		FROM clubs
+		LEFT JOIN club_memberships AS memberships
+		  ON memberships.club_id = clubs.id AND memberships.user_id = $1
+		LEFT JOIN club_administrators AS administrators
+		  ON administrators.club_id = clubs.id AND administrators.user_id = $1
+		LEFT JOIN applications AS pending
+		  ON pending.club_id = clubs.id AND pending.user_id = $1 AND pending.status = 'pending'
+		WHERE clubs.status = 'active'
+		  AND (memberships.user_id IS NOT NULL OR administrators.user_id IS NOT NULL OR pending.id IS NOT NULL)
+		  AND ($2::timestamptz IS NULL OR clubs.created_at < $2 OR (clubs.created_at = $2 AND clubs.id > $3::uuid))
+		ORDER BY clubs.created_at DESC, clubs.id ASC
+		LIMIT $4`, userID, nullableTime(page.Cursor, cursorTime), cursorID, page.Limit+1)
 	if err != nil {
 		return profileResponse{}, err
 	}
 	defer rows.Close()
-	profile.Clubs = make([]clubSummary, 0)
+	states := make([]profileClubState, 0)
 	for rows.Next() {
-		var club clubSummary
-		if err := rows.Scan(&club.ID, &club.Name, &club.Description); err != nil {
+		var state profileClubState
+		if err := rows.Scan(&state.Club.ID, &state.Club.Name, &state.Club.Description, &state.Club.CreatedAt,
+			&state.IsMember, &state.IsAdmin, &state.HasPending); err != nil {
 			return profileResponse{}, err
 		}
-		profile.Clubs = append(profile.Clubs, club)
+		states = append(states, state)
 	}
 	if err := rows.Err(); err != nil {
 		return profileResponse{}, err
 	}
-	rows, err = db.QueryContext(ctx, `
-		SELECT administrators.club_id::text
-		FROM club_administrators AS administrators
-		JOIN clubs ON clubs.id = administrators.club_id
-		WHERE administrators.user_id = $1
-		  AND clubs.status = 'active'
-	ORDER BY administrators.club_id`, userID)
-	if err != nil {
-		return profileResponse{}, err
-	}
-	defer rows.Close()
+	pageResult := finishPage(states, page.Limit, func(state profileClubState) pageCursor {
+		return pageCursor{Key: state.Club.CreatedAt.Format(time.RFC3339Nano), ID: state.Club.ID}
+	})
+	profile.Clubs = make([]clubSummary, 0, len(pageResult.Items))
 	profile.AdministratorClubIDs = make([]string, 0)
-	for rows.Next() {
-		var clubID string
-		if err := rows.Scan(&clubID); err != nil {
-			return profileResponse{}, err
+	profile.PendingApplicationClubIDs = make([]string, 0)
+	for _, state := range pageResult.Items {
+		if state.IsMember {
+			profile.Clubs = append(profile.Clubs, state.Club)
 		}
-		profile.AdministratorClubIDs = append(profile.AdministratorClubIDs, clubID)
+		if state.IsAdmin {
+			profile.AdministratorClubIDs = append(profile.AdministratorClubIDs, state.Club.ID)
+		}
+		if state.HasPending {
+			profile.PendingApplicationClubIDs = append(profile.PendingApplicationClubIDs, state.Club.ID)
+		}
 	}
-	if err := rows.Err(); err != nil {
-		return profileResponse{}, err
-	}
+	profile.nextCursor = pageResult.NextCursor
 	return profile, nil
 }
 

@@ -41,6 +41,21 @@ test("registration, club request, materials, pagination and safe text rendering"
   expect(cursorPage.nextItems).toHaveLength(1);
   expect(cursorPage.nextItems[0].id).not.toBe(cursorPage.firstItems[0].id);
 
+  const profilePage = await page.evaluate(async () => {
+    const firstResponse = await fetch("/api/profile?limit=1");
+    const first = await firstResponse.json();
+    const nextCursor = firstResponse.headers.get("X-Next-Cursor");
+    if (!nextCursor) throw new Error("expected another profile page");
+    const nextResponse = await fetch(`/api/profile?limit=1&cursor=${encodeURIComponent(nextCursor)}`);
+    const next = await nextResponse.json();
+    return { first, next };
+  });
+  const firstProfileClub = profilePage.first.clubs[0]?.id ?? profilePage.first.administrator_club_ids[0];
+  const nextProfileClub = profilePage.next.clubs[0]?.id ?? profilePage.next.administrator_club_ids[0];
+  expect(firstProfileClub).toBeTruthy();
+  expect(nextProfileClub).toBeTruthy();
+  expect(nextProfileClub).not.toBe(firstProfileClub);
+
   const applicantContext = await browser.newContext();
   const applicant = await applicantContext.newPage();
   await register(applicant, applicantLogin);
@@ -49,6 +64,8 @@ test("registration, club request, materials, pagination and safe text rendering"
   await applicant.getByLabel("Почему хотите присоединиться?").fill("Хочу участвовать.");
   await applicant.getByRole("button", { name: "Отправить заявку" }).click();
   await expect(applicant.getByText("Заявка отправлена.")).toBeVisible();
+  await expect(clubCard.getByText("Заявка на рассмотрении")).toBeVisible();
+  await expect(clubCard.getByRole("button", { name: "Подать заявку" })).toHaveCount(0);
 
   await page.reload();
   await page.locator(".club-card").filter({ hasText: clubName }).getByRole("button", { name: "Управление" }).click();

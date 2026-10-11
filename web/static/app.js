@@ -67,6 +67,36 @@ async function requestPage(path, cursor = null) {
         throw new Error("Сервер вернул неверный формат списка.");
     return { items: payload, nextCursor: response.headers.get("X-Next-Cursor") };
 }
+async function requestProfile() {
+    let cursor = null;
+    let result = null;
+    do {
+        const url = new URL("/api/profile", window.location.origin);
+        url.searchParams.set("limit", "50");
+        if (cursor)
+            url.searchParams.set("cursor", cursor);
+        const response = await fetch(url, { credentials: "same-origin", headers: { Accept: "application/json" } });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) {
+            const errorText = isRecord(payload) && typeof payload.error === "string" ? payload.error : "Не удалось выполнить запрос.";
+            throw new ApiError(response.status, userMessage(response.status, errorText));
+        }
+        if (!isRecord(payload) || !Array.isArray(payload.clubs) || !Array.isArray(payload.administrator_club_ids) || !Array.isArray(payload.pending_application_club_ids)) {
+            throw new Error("Сервер вернул неверный формат профиля.");
+        }
+        if (!result)
+            result = payload;
+        else {
+            result.clubs.push(...payload.clubs);
+            result.administrator_club_ids.push(...payload.administrator_club_ids);
+            result.pending_application_club_ids.push(...payload.pending_application_club_ids);
+        }
+        cursor = response.headers.get("X-Next-Cursor");
+    } while (cursor);
+    if (!result)
+        throw new Error("Не удалось загрузить профиль.");
+    return result;
+}
 function addLoadMoreControl(container, path, cursor, appendItems, updateCursor) {
     if (!cursor)
         return;
@@ -120,7 +150,7 @@ function showNotice(message, isError = false) {
 }
 async function loadDashboard() {
     const [newProfile, newClubs, newApplications] = await Promise.all([
-        request("/api/profile"),
+        requestProfile(),
         requestPage("/api/clubs"),
         requestPage("/api/applications"),
     ]);
@@ -362,7 +392,7 @@ function renderClubCard(club) {
     card.append(element("p", "club-description", club.description || "Описание пока не добавили."));
     const member = profile?.clubs.some((item) => item.id === club.id) ?? false;
     const administrator = profile?.administrator_club_ids.includes(club.id) ?? false;
-    const ownPending = applications.some((item) => item.club_id === club.id && item.user_id === profile?.id && item.status === "pending");
+    const ownPending = profile?.pending_application_club_ids.includes(club.id) ?? false;
     const badges = element("div", "club-meta");
     if (member)
         badges.append(element("span", "badge", "Вы участник"));

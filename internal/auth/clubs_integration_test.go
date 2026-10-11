@@ -172,6 +172,17 @@ func TestPostgresClubAndProfileLifecycle(t *testing.T) {
 	if secondClub.Description != "<script>alert(1)</script>" {
 		t.Fatalf("club description was changed: %q", secondClub.Description)
 	}
+	var pendingClubID string
+	if err := db.QueryRowContext(ctx,
+		"INSERT INTO clubs (creator_id, name) VALUES ($1, 'Pending only') RETURNING id::text", rootID,
+	).Scan(&pendingClubID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO applications (user_id, club_id, text)
+		VALUES ($1, $2, 'Waiting for review')`, userID, pendingClubID); err != nil {
+		t.Fatal(err)
+	}
 	assertCursorPagination(t, func(target string) *httptest.ResponseRecorder { return get(target, "") }, "/api/clubs",
 		func(club map[string]any) string { return club["id"].(string) })
 
@@ -183,8 +194,8 @@ func TestPostgresClubAndProfileLifecycle(t *testing.T) {
 	if err := json.Unmarshal(clubsResponse.Body.Bytes(), &clubs); err != nil {
 		t.Fatal(err)
 	}
-	if len(clubs) != 2 {
-		t.Fatalf("active club count = %d, want 2", len(clubs))
+	if len(clubs) != 3 {
+		t.Fatalf("active club count = %d, want 3", len(clubs))
 	}
 	for _, club := range clubs {
 		if len(club) != 3 {
@@ -193,6 +204,10 @@ func TestPostgresClubAndProfileLifecycle(t *testing.T) {
 	}
 
 	profileHTTPResponse := get("/api/profile?user_id="+rootID, userCookie)
+	if profileHTTPResponse.Code != http.StatusBadRequest {
+		t.Fatalf("profile with unsupported user_id query status = %d, want %d", profileHTTPResponse.Code, http.StatusBadRequest)
+	}
+	profileHTTPResponse = get("/api/profile", userCookie)
 	if profileHTTPResponse.Code != http.StatusOK {
 		t.Fatalf("profile status = %d, want %d; body=%s", profileHTTPResponse.Code, http.StatusOK, profileHTTPResponse.Body.String())
 	}
@@ -200,8 +215,50 @@ func TestPostgresClubAndProfileLifecycle(t *testing.T) {
 	if err := json.Unmarshal(profileHTTPResponse.Body.Bytes(), &profile); err != nil {
 		t.Fatal(err)
 	}
-	if profile.ID != userID || profile.Login != "clubcreator" || profile.GlobalRole != "User" || len(profile.Clubs) != 2 || len(profile.AdministratorClubIDs) != 2 {
+	if profile.ID != userID || profile.Login != "clubcreator" || profile.GlobalRole != "User" || len(profile.Clubs) != 2 || len(profile.AdministratorClubIDs) != 2 || len(profile.PendingApplicationClubIDs) != 1 || profile.PendingApplicationClubIDs[0] != pendingClubID {
 		t.Fatalf("profile = %#v, want current user and both active memberships", profile)
+	}
+	firstProfilePage := get("/api/profile?limit=1", userCookie)
+	if firstProfilePage.Code != http.StatusOK || firstProfilePage.Header().Get("X-Next-Cursor") == "" {
+		t.Fatalf("first profile page status/cursor = %d/%q, want 200 and next cursor", firstProfilePage.Code, firstProfilePage.Header().Get("X-Next-Cursor"))
+	}
+	var profileClubIDs []string
+	for pageResponse := firstProfilePage; ; {
+		var page profileResponse
+		if err := json.Unmarshal(pageResponse.Body.Bytes(), &page); err != nil {
+			t.Fatal(err)
+		}
+		pageClubIDs := make(map[string]bool)
+		for _, club := range page.Clubs {
+			pageClubIDs[club.ID] = true
+		}
+		for _, id := range page.AdministratorClubIDs {
+			pageClubIDs[id] = true
+		}
+		for _, id := range page.PendingApplicationClubIDs {
+			pageClubIDs[id] = true
+		}
+		for id := range pageClubIDs {
+			profileClubIDs = append(profileClubIDs, id)
+		}
+		cursor := pageResponse.Header().Get("X-Next-Cursor")
+		if cursor == "" {
+			break
+		}
+		pageResponse = get("/api/profile?limit=1&cursor="+url.QueryEscape(cursor), userCookie)
+		if pageResponse.Code != http.StatusOK {
+			t.Fatalf("next profile page status = %d; body=%s", pageResponse.Code, pageResponse.Body.String())
+		}
+	}
+	seenProfileClubs := make(map[string]bool)
+	for _, id := range profileClubIDs {
+		if seenProfileClubs[id] {
+			t.Fatalf("profile pagination repeated club %s", id)
+		}
+		seenProfileClubs[id] = true
+	}
+	if len(seenProfileClubs) != 3 || !seenProfileClubs[firstClub.ID] || !seenProfileClubs[secondClub.ID] || !seenProfileClubs[pendingClubID] {
+		t.Fatalf("profile pagination clubs = %#v, want both memberships and pending-only club", seenProfileClubs)
 	}
 
 	if _, err := db.ExecContext(ctx, "UPDATE clubs SET status = 'archived', archived_at = now() WHERE id = $1", firstClub.ID); err != nil {
@@ -211,14 +268,14 @@ func TestPostgresClubAndProfileLifecycle(t *testing.T) {
 	if err := json.Unmarshal(clubsResponse.Body.Bytes(), &clubs); err != nil {
 		t.Fatal(err)
 	}
-	if len(clubs) != 1 {
-		t.Fatalf("active club count after archive = %d, want 1", len(clubs))
+	if len(clubs) != 2 {
+		t.Fatalf("active club count after archive = %d, want 2", len(clubs))
 	}
 	profileHTTPResponse = get("/api/profile", userCookie)
 	if err := json.Unmarshal(profileHTTPResponse.Body.Bytes(), &profile); err != nil {
 		t.Fatal(err)
 	}
-	if len(profile.Clubs) != 1 || profile.Clubs[0].ID != secondClub.ID || len(profile.AdministratorClubIDs) != 1 || profile.AdministratorClubIDs[0] != secondClub.ID {
+	if len(profile.Clubs) != 1 || profile.Clubs[0].ID != secondClub.ID || len(profile.AdministratorClubIDs) != 1 || profile.AdministratorClubIDs[0] != secondClub.ID || len(profile.PendingApplicationClubIDs) != 1 || profile.PendingApplicationClubIDs[0] != pendingClubID {
 		t.Fatalf("profile includes archived membership: %#v", profile.Clubs)
 	}
 
