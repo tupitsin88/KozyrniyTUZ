@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 
 const (
 	defaultPort              = "8080"
+	defaultListenHost        = "127.0.0.1"
 	defaultDBMaxOpenConns    = 20
 	defaultDBMaxIdleConns    = 5
 	defaultDBConnMaxLifetime = 30 * time.Minute
@@ -24,6 +26,7 @@ const (
 
 type Config struct {
 	Port              string
+	ListenHost        string
 	DatabaseURL       string
 	DBMaxOpenConns    int
 	DBMaxIdleConns    int
@@ -44,6 +47,10 @@ func Load() (Config, error) {
 	portNumber, err := strconv.Atoi(port)
 	if err != nil || portNumber < 1 || portNumber > 65535 {
 		return Config{}, fmt.Errorf("PORT must be a number between 1 and 65535")
+	}
+	listenHost := envOrDefault("LISTEN_HOST", defaultListenHost)
+	if _, err := netip.ParseAddr(listenHost); err != nil {
+		return Config{}, fmt.Errorf("LISTEN_HOST must be an IP address")
 	}
 
 	databaseURL := os.Getenv("DATABASE_URL")
@@ -90,6 +97,7 @@ func Load() (Config, error) {
 
 	return Config{
 		Port:              port,
+		ListenHost:        listenHost,
 		DatabaseURL:       databaseURL,
 		DBMaxOpenConns:    maxOpen,
 		DBMaxIdleConns:    maxIdle,

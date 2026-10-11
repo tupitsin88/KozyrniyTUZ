@@ -127,7 +127,7 @@ func run() error {
 	settings.BootstrapPassword = ""
 	settings.BootstrapLogin = ""
 
-	address := ":" + settings.Port
+	address := net.JoinHostPort(settings.ListenHost, settings.Port)
 	log.Printf("club-membership API listening on %s", address)
 	server := newHTTPServer(address, newHandler(auth.NewHTTPHandler(authService)))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
