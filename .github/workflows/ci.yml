@@ -57,3 +57,13 @@ jobs:
 
       - name: Build server
         run: go build ./cmd/server
+
+      - name: Install Chromium for browser checks
+        if: matrix.postgres-version == '15'
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser end-to-end checks
+        if: matrix.postgres-version == '15'
+        run: npm run test:e2e
+        env:
+          E2E_DATABASE_URL: postgres://postgres:postgres@localhost:5432/club_membership_test?sslmode=disable

@@ -2,9 +2,11 @@
   "name": "club-membership-web",
   "private": true,
   "scripts": {
-    "build": "tsc -p web/tsconfig.json"
+    "build": "tsc -p web/tsconfig.json",
+    "test:e2e": "playwright test"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.0",
     "typescript": "^5.9.3"
   }
 }
