@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -20,16 +21,21 @@ var ErrInvalidCredentials = errors.New("invalid login or password")
 var ErrLoginExists = errors.New("login already exists")
 var ErrInvalidInput = errors.New("invalid input")
 var ErrSessionInvalid = errors.New("session is not valid")
+var ErrAuthenticationCapacity = errors.New("password verification capacity is exhausted")
+
+const defaultPasswordOperationLimit = 2
 
 type Service struct {
-	db              *sql.DB
-	trustedOrigin   string
-	cookieName      string
-	cookieSecure    bool
-	idleTimeout     time.Duration
-	absoluteTimeout time.Duration
-	argon           argonParameters
-	dummyVerifier   string
+	db                 *sql.DB
+	trustedOrigin      string
+	cookieName         string
+	cookieSecure       bool
+	idleTimeout        time.Duration
+	absoluteTimeout    time.Duration
+	argon              argonParameters
+	dummyVerifier      string
+	passwordOperations chan struct{}
+	trustedProxyCIDRs  []netip.Prefix
 }
 
 type Principal struct {
@@ -40,6 +46,13 @@ type Principal struct {
 }
 
 func NewService(db *sql.DB, settings config.Config) (*Service, error) {
+	maxConcurrent := settings.ArgonMaxConcurrent
+	if maxConcurrent == 0 {
+		maxConcurrent = defaultPasswordOperationLimit
+	}
+	if maxConcurrent < 1 || maxConcurrent > 4 {
+		return nil, fmt.Errorf("ARGON2_MAX_CONCURRENT must be between 1 and 4")
+	}
 	service := &Service{
 		db:              db,
 		trustedOrigin:   settings.TrustedOrigin,
@@ -50,6 +63,8 @@ func NewService(db *sql.DB, settings config.Config) (*Service, error) {
 		argon: argonParameters{
 			memory: settings.ArgonMemory, iterations: settings.ArgonIterations, parallel: settings.ArgonParallelism,
 		},
+		passwordOperations: make(chan struct{}, maxConcurrent),
+		trustedProxyCIDRs:  append([]netip.Prefix(nil), settings.TrustedProxyCIDRs...),
 	}
 	if service.cookieSecure {
 		service.cookieName = "__Host-session"
@@ -116,7 +131,7 @@ func (s *Service) Register(ctx context.Context, login, password, oldToken string
 	if err != nil || validatePassword(password) != nil {
 		return "", nil, nil, ErrInvalidInput
 	}
-	verifier, err := hashPassword(password, s.argon)
+	verifier, err := s.hashPassword(password, s.argon)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -149,7 +164,7 @@ func (s *Service) Register(ctx context.Context, login, password, oldToken string
 func (s *Service) Login(ctx context.Context, login, password, oldToken string) (string, []byte, []byte, error) {
 	normalizedLogin, err := normalizeLogin(login)
 	if err != nil || validatePassword(password) != nil {
-		_, _, verifyErr := verifyPassword(s.dummyVerifier, password)
+		_, _, verifyErr := s.verifyPassword(s.dummyVerifier, password)
 		if verifyErr != nil {
 			return "", nil, nil, verifyErr
 		}
@@ -164,14 +179,20 @@ func (s *Service) Login(ctx context.Context, login, password, oldToken string) (
 	} else if err != nil {
 		return "", nil, nil, fmt.Errorf("read account for login")
 	}
-	valid, stored, verifyErr := verifyPassword(verifier, password)
+	valid, stored, verifyErr := s.verifyPassword(verifier, password)
+	if errors.Is(verifyErr, ErrAuthenticationCapacity) {
+		return "", nil, nil, ErrAuthenticationCapacity
+	}
 	if verifyErr != nil || err == sql.ErrNoRows || !valid {
 		return "", nil, nil, ErrInvalidCredentials
 	}
 	var upgraded string
 	if needsRehash(*stored, s.argon) {
-		upgraded, err = hashPassword(password, upgradeParameters(*stored, s.argon))
+		upgraded, err = s.hashPassword(password, upgradeParameters(*stored, s.argon))
 		if err != nil {
+			if errors.Is(err, ErrAuthenticationCapacity) {
+				return "", nil, nil, ErrAuthenticationCapacity
+			}
 			return "", nil, nil, fmt.Errorf("upgrade password verifier")
 		}
 	}
@@ -194,7 +215,10 @@ func (s *Service) Login(ctx context.Context, login, password, oldToken string) (
 			if err := tx.QueryRowContext(ctx, "SELECT password_verifier FROM users WHERE id = $1 FOR UPDATE", userID).Scan(&currentVerifier); err != nil {
 				return "", nil, nil, fmt.Errorf("read current account password verifier")
 			}
-			validCurrent, _, err := verifyPassword(currentVerifier, password)
+			validCurrent, _, err := s.verifyPassword(currentVerifier, password)
+			if errors.Is(err, ErrAuthenticationCapacity) {
+				return "", nil, nil, ErrAuthenticationCapacity
+			}
 			if err != nil || !validCurrent {
 				return "", nil, nil, ErrInvalidCredentials
 			}
@@ -211,6 +235,33 @@ func (s *Service) Login(ctx context.Context, login, password, oldToken string) (
 		return "", nil, nil, fmt.Errorf("commit login session")
 	}
 	return userID, raw, csrf, nil
+}
+
+func (s *Service) hashPassword(password string, params argonParameters) (string, error) {
+	release, err := s.beginPasswordOperation()
+	if err != nil {
+		return "", err
+	}
+	defer release()
+	return hashPassword(password, params)
+}
+
+func (s *Service) verifyPassword(verifier, password string) (bool, *argonParameters, error) {
+	release, err := s.beginPasswordOperation()
+	if err != nil {
+		return false, nil, err
+	}
+	defer release()
+	return verifyPassword(verifier, password)
+}
+
+func (s *Service) beginPasswordOperation() (func(), error) {
+	select {
+	case s.passwordOperations <- struct{}{}:
+		return func() { <-s.passwordOperations }, nil
+	default:
+		return nil, ErrAuthenticationCapacity
+	}
 }
 
 func (s *Service) createSession(ctx context.Context, tx *sql.Tx, userID, oldToken string) ([]byte, []byte, error) {

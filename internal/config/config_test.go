@@ -12,6 +12,7 @@ func TestLoadDefaultsForSecuritySettings(t *testing.T) {
 	for _, name := range []string{
 		"SESSION_IDLE_TIMEOUT", "SESSION_ABSOLUTE_TIMEOUT",
 		"ARGON2_MEMORY_KIB", "ARGON2_ITERATIONS", "ARGON2_PARALLELISM",
+		"ARGON2_MAX_CONCURRENT", "TRUSTED_PROXY_CIDRS",
 	} {
 		t.Setenv(name, "")
 	}
@@ -28,6 +29,9 @@ func TestLoadDefaultsForSecuritySettings(t *testing.T) {
 	if settings.ArgonMemory != 19456 || settings.ArgonIterations != 2 || settings.ArgonParallelism != 1 {
 		t.Fatalf("unexpected Argon2id settings: %#v", settings)
 	}
+	if settings.ArgonMaxConcurrent != 2 || len(settings.TrustedProxyCIDRs) != 0 {
+		t.Fatalf("unexpected password operation limits or trusted proxies: %#v", settings)
+	}
 }
 
 func TestLoadRejectsUnsafeSecuritySettings(t *testing.T) {
@@ -36,6 +40,7 @@ func TestLoadRejectsUnsafeSecuritySettings(t *testing.T) {
 		"DB_MAX_OPEN_CONNS": "20", "DB_MAX_IDLE_CONNS": "5", "TRUSTED_ORIGIN": "http://localhost:8080",
 		"SESSION_IDLE_TIMEOUT": "30m", "SESSION_ABSOLUTE_TIMEOUT": "12h",
 		"ARGON2_MEMORY_KIB": "19456", "ARGON2_ITERATIONS": "2", "ARGON2_PARALLELISM": "1",
+		"ARGON2_MAX_CONCURRENT": "2", "TRUSTED_PROXY_CIDRS": "",
 	}
 	cases := []struct{ name, value string }{
 		{"LISTEN_HOST", "localhost"},
@@ -52,6 +57,11 @@ func TestLoadRejectsUnsafeSecuritySettings(t *testing.T) {
 		{"ARGON2_MEMORY_KIB", "1024"},
 		{"ARGON2_ITERATIONS", "99"},
 		{"ARGON2_PARALLELISM", "0"},
+		{"ARGON2_MAX_CONCURRENT", "0"},
+		{"ARGON2_MAX_CONCURRENT", "5"},
+		{"TRUSTED_PROXY_CIDRS", "10.0.0.1"},
+		{"TRUSTED_PROXY_CIDRS", "0.0.0.0/0"},
+		{"TRUSTED_PROXY_CIDRS", "10.0.0.0/8,invalid"},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name+"="+testCase.value, func(t *testing.T) {
@@ -63,5 +73,27 @@ func TestLoadRejectsUnsafeSecuritySettings(t *testing.T) {
 				t.Fatal("unsafe security configuration was accepted")
 			}
 		})
+	}
+}
+
+func TestLoadAcceptsTrustedProxyNetworks(t *testing.T) {
+	for name, value := range map[string]string{
+		"PORT": "8080", "LISTEN_HOST": "127.0.0.1", "DATABASE_URL": "postgres://user:password@localhost:5432/app?sslmode=disable",
+		"DB_MAX_OPEN_CONNS": "20", "DB_MAX_IDLE_CONNS": "5", "TRUSTED_ORIGIN": "http://localhost:8080",
+		"SESSION_IDLE_TIMEOUT": "30m", "SESSION_ABSOLUTE_TIMEOUT": "12h",
+		"ARGON2_MEMORY_KIB": "19456", "ARGON2_ITERATIONS": "2", "ARGON2_PARALLELISM": "1",
+		"ARGON2_MAX_CONCURRENT": "3", "TRUSTED_PROXY_CIDRS": "127.0.0.1/32, 10.20.0.0/16",
+	} {
+		t.Setenv(name, value)
+	}
+	settings, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.ArgonMaxConcurrent != 3 || len(settings.TrustedProxyCIDRs) != 2 {
+		t.Fatalf("unexpected limits or trusted proxies: %#v", settings)
+	}
+	if got := settings.TrustedProxyCIDRs[1].String(); got != "10.20.0.0/16" {
+		t.Fatalf("trusted proxy prefix = %q, want 10.20.0.0/16", got)
 	}
 }
