@@ -11,6 +11,7 @@ import (
 	"github.com/tupitsin88/KozyrniyTUZ/internal/auth"
 	"github.com/tupitsin88/KozyrniyTUZ/internal/config"
 	"github.com/tupitsin88/KozyrniyTUZ/internal/database"
+	webassets "github.com/tupitsin88/KozyrniyTUZ/web"
 )
 
 type healthResponse struct {
@@ -21,10 +22,54 @@ type healthResponse struct {
 func newHandler(authHandlers ...http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", healthz)
+	mux.HandleFunc("/", frontend)
 	if len(authHandlers) != 0 {
 		mux.Handle("/api/", authHandlers[0])
 	}
 	return mux
+}
+
+func frontend(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var file string
+	switch r.URL.Path {
+	case "/":
+		file = "static/index.html"
+	case "/app.js":
+		file = "static/app.js"
+	case "/styles.css":
+		file = "static/styles.css"
+	default:
+		http.NotFound(w, r)
+		return
+	}
+
+	content, err := webassets.Files.ReadFile(file)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	switch file {
+	case "static/index.html":
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	case "static/app.js":
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	case "static/styles.css":
+		w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	}
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodGet {
+		_, _ = w.Write(content)
+	}
 }
 
 func healthz(w http.ResponseWriter, r *http.Request) {

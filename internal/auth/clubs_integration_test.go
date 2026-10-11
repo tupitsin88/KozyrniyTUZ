@@ -198,7 +198,7 @@ func TestPostgresClubAndProfileLifecycle(t *testing.T) {
 	if err := json.Unmarshal(profileHTTPResponse.Body.Bytes(), &profile); err != nil {
 		t.Fatal(err)
 	}
-	if profile.ID != userID || profile.Login != "clubcreator" || len(profile.Clubs) != 2 {
+	if profile.ID != userID || profile.Login != "clubcreator" || profile.GlobalRole != "User" || len(profile.Clubs) != 2 || len(profile.AdministratorClubIDs) != 2 {
 		t.Fatalf("profile = %#v, want current user and both active memberships", profile)
 	}
 
@@ -216,7 +216,7 @@ func TestPostgresClubAndProfileLifecycle(t *testing.T) {
 	if err := json.Unmarshal(profileHTTPResponse.Body.Bytes(), &profile); err != nil {
 		t.Fatal(err)
 	}
-	if len(profile.Clubs) != 1 || profile.Clubs[0].ID != secondClub.ID {
+	if len(profile.Clubs) != 1 || profile.Clubs[0].ID != secondClub.ID || len(profile.AdministratorClubIDs) != 1 || profile.AdministratorClubIDs[0] != secondClub.ID {
 		t.Fatalf("profile includes archived membership: %#v", profile.Clubs)
 	}
 

@@ -32,6 +32,8 @@ func (h *HTTPHandler) clubRoutes(w http.ResponseWriter, r *http.Request) {
 		h.archiveClub(w, r, parts[0])
 	case len(parts) == 2 && isUUID(parts[0]) && parts[1] == "materials":
 		h.clubMaterials(w, r, parts[0])
+	case len(parts) == 2 && isUUID(parts[0]) && parts[1] == "members":
+		h.clubMemberCollection(w, r, parts[0])
 	case len(parts) == 3 && isUUID(parts[0]) && parts[1] == "members" && isUUID(parts[2]):
 		h.clubMemberships(w, r)
 	default:
