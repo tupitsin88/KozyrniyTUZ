@@ -37,7 +37,8 @@ func NewHTTPHandler(service *Service) http.Handler {
 	mux.HandleFunc("/api/profile", handler.profile)
 	mux.HandleFunc("/api/applications", handler.applications)
 	mux.HandleFunc("/api/applications/", handler.application)
-	mux.HandleFunc("/api/clubs/", handler.clubMemberships)
+	mux.HandleFunc("/api/clubs/", handler.clubRoutes)
+	mux.HandleFunc("/api/materials/", handler.material)
 	return securityHeaders(mux)
 }
 
