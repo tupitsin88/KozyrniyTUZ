@@ -282,6 +282,7 @@ func TestPostgresApplicationAndMembershipLifecycle(t *testing.T) {
 			t.Fatalf("denied decisions changed application: status=%q administrator=%#v decided_at=%#v", status, administratorID, decidedAt)
 		}
 		assertMembershipCount(t, ctx, db, applicantA.userID, clubA, 0)
+		t.Log("observed: all denied decisions returned 404 without application text; status=pending, administrator_id=NULL, decided_at=NULL, memberships=0")
 	})
 	if response := applicationAPIRequest(handler, service, &adminA, http.MethodPost,
 		"/api/applications/"+firstApplication.ID+"/decision", `{"status":"approved","administrator_id":"`+adminB.userID+`"}`, settings.TrustedOrigin, adminA.csrf); response.Code != http.StatusBadRequest {
@@ -304,12 +305,14 @@ func TestPostgresApplicationAndMembershipLifecycle(t *testing.T) {
 			t.Fatalf("approval response did not record current administrator and decision time: %#v", approvedApplication)
 		}
 		assertMembershipCount(t, ctx, db, applicantA.userID, clubA, 1)
+		t.Log("observed: current club administrator received 200; status=approved, administrator_id=current actor, decided_at=present, memberships=1")
 	})
 	t.Run("D-03 preserves the first completed decision", func(t *testing.T) {
 		if response := requestDecision(adminA, firstApplication.ID, "rejected"); response.Code != http.StatusConflict {
 			t.Fatalf("repeat decision status = %d, want %d", response.Code, http.StatusConflict)
 		}
 		assertMembershipCount(t, ctx, db, applicantA.userID, clubA, 1)
+		t.Log("observed: repeated opposite decision returned 409; approved state and memberships=1 remained unchanged")
 	})
 
 	rejectedApplicationResponse := submit(applicantB, clubA, "will be rejected")
@@ -467,6 +470,7 @@ func TestPostgresApplicationAndMembershipLifecycle(t *testing.T) {
 		} else {
 			t.Fatalf("concurrent decision left invalid status %q", finalStatus)
 		}
+		t.Logf("observed: concurrent responses=%v; final_status=%s; membership matches the final status", decisionStatuses, finalStatus)
 	})
 
 	var rollbackApplication applicationRecord
@@ -499,6 +503,7 @@ func TestPostgresApplicationAndMembershipLifecycle(t *testing.T) {
 			t.Fatalf("failed approval left status %q, want pending", rollbackStatus)
 		}
 		assertMembershipCount(t, ctx, db, rollbackApplicant.userID, clubA, 0)
+		t.Log("observed: forced membership failure returned 500; status=pending, memberships=0")
 		if _, err := db.ExecContext(ctx, "DROP TRIGGER reject_test_membership_insert ON club_memberships; DROP FUNCTION reject_test_membership_insert()"); err != nil {
 			t.Fatal(err)
 		}
