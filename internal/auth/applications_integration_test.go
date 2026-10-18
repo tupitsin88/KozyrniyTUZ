@@ -248,15 +248,42 @@ func TestPostgresApplicationAndMembershipLifecycle(t *testing.T) {
 			t.Fatal("club A administrator received club B application")
 		}
 	}
-	if response := requestDecision(applicantA, firstApplication.ID, "approved"); response.Code != http.StatusNotFound {
-		t.Fatalf("non-administrator decision status = %d, want %d", response.Code, http.StatusNotFound)
-	}
-	if response := requestDecision(adminB, firstApplication.ID, "approved"); response.Code != http.StatusNotFound {
-		t.Fatalf("other-club administrator decision status = %d, want %d", response.Code, http.StatusNotFound)
-	}
-	if response := requestDecision(rootToken, firstApplication.ID, "approved"); response.Code != http.StatusNotFound {
-		t.Fatalf("SuperUser decision status = %d, want %d", response.Code, http.StatusNotFound)
-	}
+	t.Run("T-05 to SR-04 to D-02 rejects unauthorized decisions without disclosure or state change", func(t *testing.T) {
+		for _, testCase := range []struct {
+			name    string
+			session applicationTestSession
+		}{
+			{name: "applicant", session: applicantA},
+			{name: "administrator of another club", session: adminB},
+			{name: "SuperUser", session: rootToken},
+		} {
+			t.Run(testCase.name, func(t *testing.T) {
+				response := requestDecision(testCase.session, firstApplication.ID, "approved")
+				if response.Code != http.StatusNotFound {
+					t.Fatalf("decision status = %d, want %d", response.Code, http.StatusNotFound)
+				}
+				if strings.Contains(response.Body.String(), firstApplication.Text) {
+					t.Fatalf("denied decision disclosed application text: %s", response.Body.String())
+				}
+			})
+		}
+
+		var status string
+		var administratorID sql.NullString
+		var decidedAt sql.NullTime
+		if err := db.QueryRowContext(ctx, `
+			SELECT status, administrator_id::text, decided_at
+			FROM applications
+			WHERE id = $1`, firstApplication.ID,
+		).Scan(&status, &administratorID, &decidedAt); err != nil {
+			t.Fatal(err)
+		}
+		if status != "pending" || administratorID.Valid || decidedAt.Valid {
+			t.Fatalf("denied decisions changed application: status=%q administrator=%#v decided_at=%#v", status, administratorID, decidedAt)
+		}
+		assertMembershipCount(t, ctx, db, applicantA.userID, clubA, 0)
+		t.Log("observed: all denied decisions returned 404 without application text; status=pending, administrator_id=NULL, decided_at=NULL, memberships=0")
+	})
 	if response := applicationAPIRequest(handler, service, &adminA, http.MethodPost,
 		"/api/applications/"+firstApplication.ID+"/decision", `{"status":"approved","administrator_id":"`+adminB.userID+`"}`, settings.TrustedOrigin, adminA.csrf); response.Code != http.StatusBadRequest {
 		t.Fatalf("protected decision field status = %d, want %d", response.Code, http.StatusBadRequest)
@@ -265,22 +292,28 @@ func TestPostgresApplicationAndMembershipLifecycle(t *testing.T) {
 		"/api/applications/"+firstApplication.ID+"/decision", `{"status":"approved"}`, settings.TrustedOrigin, "invalid"); response.Code != http.StatusForbidden {
 		t.Fatalf("decision with invalid CSRF status = %d, want %d", response.Code, http.StatusForbidden)
 	}
-	approved := requestDecision(adminA, firstApplication.ID, "approved")
-	if approved.Code != http.StatusOK {
-		t.Fatalf("authorized approval status = %d, want %d; body=%s", approved.Code, http.StatusOK, approved.Body.String())
-	}
-	var approvedApplication applicationRecord
-	if err := json.Unmarshal(approved.Body.Bytes(), &approvedApplication); err != nil {
-		t.Fatal(err)
-	}
-	if approvedApplication.Status != "approved" || approvedApplication.AdministratorID == nil || *approvedApplication.AdministratorID != adminA.userID || approvedApplication.DecidedAt == nil {
-		t.Fatalf("approval response did not record current administrator and decision time: %#v", approvedApplication)
-	}
-	assertMembershipCount(t, ctx, db, applicantA.userID, clubA, 1)
-	if response := requestDecision(adminA, firstApplication.ID, "rejected"); response.Code != http.StatusConflict {
-		t.Fatalf("repeat decision status = %d, want %d", response.Code, http.StatusConflict)
-	}
-	assertMembershipCount(t, ctx, db, applicantA.userID, clubA, 1)
+	t.Run("SR-04 to D-02 allows the current club administrator to approve", func(t *testing.T) {
+		approved := requestDecision(adminA, firstApplication.ID, "approved")
+		if approved.Code != http.StatusOK {
+			t.Fatalf("authorized approval status = %d, want %d; body=%s", approved.Code, http.StatusOK, approved.Body.String())
+		}
+		var approvedApplication applicationRecord
+		if err := json.Unmarshal(approved.Body.Bytes(), &approvedApplication); err != nil {
+			t.Fatal(err)
+		}
+		if approvedApplication.Status != "approved" || approvedApplication.AdministratorID == nil || *approvedApplication.AdministratorID != adminA.userID || approvedApplication.DecidedAt == nil {
+			t.Fatalf("approval response did not record current administrator and decision time: %#v", approvedApplication)
+		}
+		assertMembershipCount(t, ctx, db, applicantA.userID, clubA, 1)
+		t.Log("observed: current club administrator received 200; status=approved, administrator_id=current actor, decided_at=present, memberships=1")
+	})
+	t.Run("D-03 preserves the first completed decision", func(t *testing.T) {
+		if response := requestDecision(adminA, firstApplication.ID, "rejected"); response.Code != http.StatusConflict {
+			t.Fatalf("repeat decision status = %d, want %d", response.Code, http.StatusConflict)
+		}
+		assertMembershipCount(t, ctx, db, applicantA.userID, clubA, 1)
+		t.Log("observed: repeated opposite decision returned 409; approved state and memberships=1 remained unchanged")
+	})
 
 	rejectedApplicationResponse := submit(applicantB, clubA, "will be rejected")
 	if rejectedApplicationResponse.Code != http.StatusCreated {
@@ -404,71 +437,77 @@ func TestPostgresApplicationAndMembershipLifecycle(t *testing.T) {
 		t.Fatalf("concurrent pending application count = %d, want 1", concurrentPendingCount)
 	}
 
-	concurrentDecisions := make(chan *httptest.ResponseRecorder, 2)
-	startDecision := make(chan struct{})
-	var decisionWait sync.WaitGroup
-	for _, decision := range []string{"approved", "rejected"} {
-		decisionWait.Add(1)
-		go func(decision string) {
-			defer decisionWait.Done()
-			<-startDecision
-			concurrentDecisions <- requestDecision(adminA, concurrentApplication.ID, decision)
-		}(decision)
-	}
-	close(startDecision)
-	decisionWait.Wait()
-	close(concurrentDecisions)
-	decisionStatuses := map[int]int{}
-	for response := range concurrentDecisions {
-		decisionStatuses[response.Code]++
-	}
-	if decisionStatuses[http.StatusOK] != 1 || decisionStatuses[http.StatusConflict] != 1 {
-		t.Fatalf("concurrent decision statuses = %#v, want one 200 and one 409", decisionStatuses)
-	}
-	var finalStatus string
-	if err := db.QueryRowContext(ctx, "SELECT status FROM applications WHERE id = $1", concurrentApplication.ID).Scan(&finalStatus); err != nil {
-		t.Fatal(err)
-	}
-	if finalStatus == "approved" {
-		assertMembershipCount(t, ctx, db, concurrentApplicant.userID, clubA, 1)
-	} else if finalStatus == "rejected" {
-		assertMembershipCount(t, ctx, db, concurrentApplicant.userID, clubA, 0)
-	} else {
-		t.Fatalf("concurrent decision left invalid status %q", finalStatus)
-	}
+	t.Run("D-03 serializes concurrent opposite decisions", func(t *testing.T) {
+		concurrentDecisions := make(chan *httptest.ResponseRecorder, 2)
+		startDecision := make(chan struct{})
+		var decisionWait sync.WaitGroup
+		for _, decision := range []string{"approved", "rejected"} {
+			decisionWait.Add(1)
+			go func(decision string) {
+				defer decisionWait.Done()
+				<-startDecision
+				concurrentDecisions <- requestDecision(adminA, concurrentApplication.ID, decision)
+			}(decision)
+		}
+		close(startDecision)
+		decisionWait.Wait()
+		close(concurrentDecisions)
+		decisionStatuses := map[int]int{}
+		for response := range concurrentDecisions {
+			decisionStatuses[response.Code]++
+		}
+		if decisionStatuses[http.StatusOK] != 1 || decisionStatuses[http.StatusConflict] != 1 {
+			t.Fatalf("concurrent decision statuses = %#v, want one 200 and one 409", decisionStatuses)
+		}
+		var finalStatus string
+		if err := db.QueryRowContext(ctx, "SELECT status FROM applications WHERE id = $1", concurrentApplication.ID).Scan(&finalStatus); err != nil {
+			t.Fatal(err)
+		}
+		if finalStatus == "approved" {
+			assertMembershipCount(t, ctx, db, concurrentApplicant.userID, clubA, 1)
+		} else if finalStatus == "rejected" {
+			assertMembershipCount(t, ctx, db, concurrentApplicant.userID, clubA, 0)
+		} else {
+			t.Fatalf("concurrent decision left invalid status %q", finalStatus)
+		}
+		t.Logf("observed: concurrent responses=%v; final_status=%s; membership matches the final status", decisionStatuses, finalStatus)
+	})
 
-	rollbackResponse := submit(rollbackApplicant, clubA, "rollback check")
-	if rollbackResponse.Code != http.StatusCreated {
-		t.Fatalf("rollback scenario submission status = %d", rollbackResponse.Code)
-	}
 	var rollbackApplication applicationRecord
-	if err := json.Unmarshal(rollbackResponse.Body.Bytes(), &rollbackApplication); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.ExecContext(ctx, `
-		CREATE FUNCTION reject_test_membership_insert() RETURNS trigger LANGUAGE plpgsql AS $$
-		BEGIN
-			RAISE EXCEPTION 'membership insertion rejected';
-		END
-		$$;
-		CREATE TRIGGER reject_test_membership_insert BEFORE INSERT ON club_memberships
-		FOR EACH ROW EXECUTE FUNCTION reject_test_membership_insert()`); err != nil {
-		t.Fatal(err)
-	}
-	if response := requestDecision(adminA, rollbackApplication.ID, "approved"); response.Code != http.StatusInternalServerError {
-		t.Fatalf("forced membership failure status = %d, want %d", response.Code, http.StatusInternalServerError)
-	}
-	var rollbackStatus string
-	if err := db.QueryRowContext(ctx, "SELECT status FROM applications WHERE id = $1", rollbackApplication.ID).Scan(&rollbackStatus); err != nil {
-		t.Fatal(err)
-	}
-	if rollbackStatus != "pending" {
-		t.Fatalf("failed approval left status %q, want pending", rollbackStatus)
-	}
-	assertMembershipCount(t, ctx, db, rollbackApplicant.userID, clubA, 0)
-	if _, err := db.ExecContext(ctx, "DROP TRIGGER reject_test_membership_insert ON club_memberships; DROP FUNCTION reject_test_membership_insert()"); err != nil {
-		t.Fatal(err)
-	}
+	t.Run("D-03 rolls back the decision when membership creation fails", func(t *testing.T) {
+		rollbackResponse := submit(rollbackApplicant, clubA, "rollback check")
+		if rollbackResponse.Code != http.StatusCreated {
+			t.Fatalf("rollback scenario submission status = %d", rollbackResponse.Code)
+		}
+		if err := json.Unmarshal(rollbackResponse.Body.Bytes(), &rollbackApplication); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, `
+			CREATE FUNCTION reject_test_membership_insert() RETURNS trigger LANGUAGE plpgsql AS $$
+			BEGIN
+				RAISE EXCEPTION 'membership insertion rejected';
+			END
+			$$;
+			CREATE TRIGGER reject_test_membership_insert BEFORE INSERT ON club_memberships
+			FOR EACH ROW EXECUTE FUNCTION reject_test_membership_insert()`); err != nil {
+			t.Fatal(err)
+		}
+		if response := requestDecision(adminA, rollbackApplication.ID, "approved"); response.Code != http.StatusInternalServerError {
+			t.Fatalf("forced membership failure status = %d, want %d", response.Code, http.StatusInternalServerError)
+		}
+		var rollbackStatus string
+		if err := db.QueryRowContext(ctx, "SELECT status FROM applications WHERE id = $1", rollbackApplication.ID).Scan(&rollbackStatus); err != nil {
+			t.Fatal(err)
+		}
+		if rollbackStatus != "pending" {
+			t.Fatalf("failed approval left status %q, want pending", rollbackStatus)
+		}
+		assertMembershipCount(t, ctx, db, rollbackApplicant.userID, clubA, 0)
+		t.Log("observed: forced membership failure returned 500; status=pending, memberships=0")
+		if _, err := db.ExecContext(ctx, "DROP TRIGGER reject_test_membership_insert ON club_memberships; DROP FUNCTION reject_test_membership_insert()"); err != nil {
+			t.Fatal(err)
+		}
+	})
 
 	if _, err := db.ExecContext(ctx, `
 		CREATE SEQUENCE application_deadlock_test_sequence;
