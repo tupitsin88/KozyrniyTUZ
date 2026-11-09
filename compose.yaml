@@ -1,0 +1,40 @@
+services:
+  app:
+    image: kozyrniytuz:local
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${APP_PORT:-18080}:8080"
+    environment:
+      LISTEN_HOST: 0.0.0.0
+      TRUSTED_ORIGIN: "http://127.0.0.1:${APP_PORT:-18080}"
+      DATABASE_URL: "postgres://club_app:${CLUB_DB_PASSWORD:?set CLUB_DB_PASSWORD in .env}@db:5432/club_membership?sslmode=disable"
+      BOOTSTRAP_SUPERUSER_LOGIN: ${BOOTSTRAP_SUPERUSER_LOGIN:-local-root}
+      BOOTSTRAP_SUPERUSER_PASSWORD: ${BOOTSTRAP_SUPERUSER_PASSWORD:?set BOOTSTRAP_SUPERUSER_PASSWORD in .env}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 3s
+      timeout: 2s
+      retries: 15
+      start_period: 5s
+
+  db:
+    image: postgres:18@sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42
+    environment:
+      POSTGRES_DB: club_membership
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      CLUB_DB_PASSWORD: ${CLUB_DB_PASSWORD:?set CLUB_DB_PASSWORD in .env}
+    volumes:
+      - db-data:/var/lib/postgresql
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/10-club-app.sql:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "club_app", "-d", "club_membership"]
+      interval: 3s
+      timeout: 2s
+      retries: 15
+      start_period: 5s
+
+volumes:
+  db-data:

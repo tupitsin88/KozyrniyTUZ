@@ -198,7 +198,69 @@ Web-интерфейс для основных сценариев регистр
 
 ## 10. Локальный запуск
 
-Требуются Go `1.26` или совместимая версия и поддерживаемый PostgreSQL `15` или новее. CI проверяет интеграционные сценарии на PostgreSQL 15 и 18. Собранный TypeScript-интерфейс включён в Go-бинарник; Node.js нужен только для его изменения и пересборки. По умолчанию сервер слушает только `127.0.0.1`; для развёртывания за reverse proxy адрес можно явно задать через `LISTEN_HOST`.
+### Стенд Docker Compose
+
+Запустите Docker Desktop в режиме Linux containers. Откройте терминал в папке, где лежит `compose.yaml`. Для этого способа достаточно Docker Compose v2.
+
+**1. Создайте локальные пароли при первом запуске.** Блок создаёт `.env` с тремя разными случайными паролями. Если `.env` уже есть, блок оставит его как есть. `.env.example` описывает параметры, его поля паролей пустые.
+
+Windows PowerShell
+
+```powershell
+if (-not (Test-Path -LiteralPath .env)) {
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    $settings = @('APP_PORT=18080', 'BOOTSTRAP_SUPERUSER_LOGIN=local-root')
+    foreach ($name in 'POSTGRES_PASSWORD', 'CLUB_DB_PASSWORD', 'BOOTSTRAP_SUPERUSER_PASSWORD') {
+        $bytes = New-Object byte[] 24
+        $rng.GetBytes($bytes)
+        $settings += "$name=$([BitConverter]::ToString($bytes).Replace('-', ''))"
+    }
+    $rng.Dispose()
+    $settings | Set-Content -LiteralPath .env -Encoding ascii
+}
+```
+
+macOS или Linux
+
+```sh
+if [ ! -e .env ]; then
+  (
+    umask 077
+    set -e
+    postgres_password=$(openssl rand -hex 24)
+    club_db_password=$(openssl rand -hex 24)
+    bootstrap_password=$(openssl rand -hex 24)
+    printf '%s\n' 'APP_PORT=18080' 'BOOTSTRAP_SUPERUSER_LOGIN=local-root' \
+      "POSTGRES_PASSWORD=$postgres_password" "CLUB_DB_PASSWORD=$club_db_password" \
+      "BOOTSTRAP_SUPERUSER_PASSWORD=$bootstrap_password" > .env
+  )
+fi
+```
+
+**2. Поднимите стенд и проверьте готовность.**
+
+```powershell
+docker compose up --build --wait --wait-timeout 120
+docker compose ps
+curl.exe -fsS http://127.0.0.1:18080/healthz
+```
+
+На macOS и Linux используйте `curl` вместо `curl.exe`. В выводе `ps` оба сервиса, `app` и `db`, должны быть `healthy`. Ожидаемый ответ API — `{"status":"ok","service":"club-membership"}`.
+
+**3. Войдите в приложение.** Откройте именно `http://127.0.0.1:18080/`. В Windows откройте `.env` командой `notepad .env`. Логин берите из `BOOTSTRAP_SUPERUSER_LOGIN` (по умолчанию `local-root`). Пароль — значение после знака `=` в строке `BOOTSTRAP_SUPERUSER_PASSWORD`. Два других пароля используются внутри стенда для PostgreSQL. Адрес с `localhost` даёт другой `Origin`, и приложение отклоняет вход. Если меняли `APP_PORT`, используйте этот порт и в браузере, и в запросе `/healthz`.
+
+**Если вход не проходит.**
+
+- Если Compose сообщает `set … in .env`, проверьте, что файл называется `.env`, а три поля паролей заполнены. Если это пустая копия шаблона и стенд ещё не запускался, переименуйте её и повторите шаг 1.
+- Если оба сервиса `healthy`, но пароль отклонён после замены `.env`, используется пароль, с которым впервые запустили текущую базу. Верните первоначальные значения. Для чистого учебного стенда можно выполнить `docker compose down --volumes` и повторить шаг 2 с текущим `.env`. Эта команда удаляет данные стенда.
+
+Для обычной остановки выполните `docker compose down`. Данные и пароль входа сохранятся. Храните `.env` у себя.
+
+Сборка, тесты Go на PostgreSQL 15 и 18 и запуск стенда подтверждены на коммите `2fb995e`. Проверенный SHA и результаты сохранены в [артефактах CI](https://github.com/tupitsin88/KozyrniyTUZ/actions/runs/42509250376). Локально на этой версии проверен запуск Compose из чистой копии. Отдельный запуск образа через `docker run` проверен на Linux ARM64 на коммите [`ce39995`](https://github.com/tupitsin88/KozyrniyTUZ/commit/ce3999550b1a65f95d2b464a7811e3ad38db1470). Повтор запуска на Windows описан в [записи M3](CONTRIBUTIONS.md#m3--идентификация-полномочия-и-пароли).
+
+### Запуск без контейнеров
+
+Требуются Go `1.26.9` или совместимая более новая версия и PostgreSQL `15` или новее. CI проверяет интеграционные сценарии на PostgreSQL 15 и 18. Собранный TypeScript-интерфейс включён в Go-бинарник; Node.js нужен только для его изменения и пересборки. По умолчанию сервер слушает только `127.0.0.1`; для развёртывания за reverse proxy адрес можно явно задать через `LISTEN_HOST`.
 
 1. Найдите `psql.exe`. Для стандартной установки PostgreSQL команда обычно находится в каталоге версии:
 

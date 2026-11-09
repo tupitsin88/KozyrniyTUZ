@@ -31,6 +31,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -44,11 +46,27 @@ jobs:
           node-version: 24
           cache: npm
 
+      - name: Record checked version
+        run: |
+          mkdir -p Evidence
+          {
+            echo "checked_commit=$(git rev-parse HEAD)"
+            echo "run_id=$GITHUB_RUN_ID"
+            echo "run_attempt=$GITHUB_RUN_ATTEMPT"
+            echo "postgres=${{ matrix.postgres-version }}"
+            go version
+            node --version
+          } > Evidence/run-info.txt
+
       - name: Build frontend
         run: npm ci && npm run build
 
       - name: Run Go tests with PostgreSQL integration enabled
-        run: go test ./...
+        shell: bash
+        run: |
+          go test -count=1 -json ./... | tee Evidence/go-tests.jsonl
+          jq -es 'any(.[]; .Action == "pass" and ((.Test // "") | startswith("TestPostgres")))
+            and (any(.[]; .Action == "skip" and .Test != null) | not)' Evidence/go-tests.jsonl
         env:
           AUTH_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/club_membership_test?sslmode=disable
 
@@ -64,6 +82,74 @@ jobs:
 
       - name: Run browser end-to-end checks
         if: matrix.postgres-version == '15'
-        run: npm run test:e2e
+        run: npm run test:e2e -- --reporter=list,json
         env:
           E2E_DATABASE_URL: postgres://postgres:postgres@localhost:5432/club_membership_test?sslmode=disable
+          PLAYWRIGHT_JSON_OUTPUT_FILE: Evidence/playwright.json
+
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: verification-pg${{ matrix.postgres-version }}-${{ github.run_attempt }}
+          path: Evidence/
+          retention-days: 30
+
+  stand:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Prepare isolated stand
+        run: |
+          mkdir -p Evidence
+          echo "checked_commit=$(git rev-parse HEAD)" > Evidence/run-info.txt
+          docker compose version >> Evidence/run-info.txt
+          umask 077
+          {
+            echo "POSTGRES_PASSWORD=$(openssl rand -hex 24)"
+            echo "CLUB_DB_PASSWORD=$(openssl rand -hex 24)"
+            echo "BOOTSTRAP_SUPERUSER_PASSWORD=$(openssl rand -hex 24)"
+          } > "$RUNNER_TEMP/compose.env"
+          docker compose --env-file "$RUNNER_TEMP/compose.env" config --quiet
+
+      - name: Build and start the stand
+        run: docker compose --env-file "$RUNNER_TEMP/compose.env" up --build --wait --wait-timeout 120
+
+      - name: Check HTTP, migrations and runtime user
+        shell: bash
+        run: |
+          curl -fsS http://127.0.0.1:18080/healthz | tee Evidence/health.json |
+            jq -e '.status == "ok" and .service == "club-membership"'
+          curl -fsS http://127.0.0.1:18080/app.js > /dev/null
+          uid=$(docker compose --env-file "$RUNNER_TEMP/compose.env" exec -T app id -u)
+          test "$uid" -ne 0
+          printf 'app_uid=%s\n' "$uid" >> Evidence/run-info.txt
+          docker compose --env-file "$RUNNER_TEMP/compose.env" exec -T app test ! -f /app/.env
+          db_ready=$(docker compose --env-file "$RUNNER_TEMP/compose.env" exec -T db \
+            psql -X -U postgres -d club_membership -Atqc \
+            "SELECT EXISTS (SELECT FROM schema_migrations)
+              AND EXISTS (SELECT FROM pg_roles WHERE rolname = 'club_app' AND NOT rolsuper)")
+          test "$db_ready" = t
+          echo "migrations_applied_with_non_superuser=true" >> Evidence/run-info.txt
+          docker image inspect kozyrniytuz:local --format '{{.Id}} {{.Os}}/{{.Architecture}}' > Evidence/image.txt
+
+      - name: Stop isolated stand
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/compose.env" ]; then
+            docker compose --env-file "$RUNNER_TEMP/compose.env" ps --all > Evidence/stand-status.txt || true
+            docker compose --env-file "$RUNNER_TEMP/compose.env" down --volumes
+          fi
+
+      - name: Upload stand evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: verification-stand-${{ github.run_attempt }}
+          path: Evidence/
+          retention-days: 30

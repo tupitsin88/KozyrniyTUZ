@@ -1,0 +1,11 @@
+*
+!go.mod
+!go.sum
+!package.json
+!package-lock.json
+!cmd/
+!internal/
+!web/
+**/.env
+**/.env.*
+**/node_modules
