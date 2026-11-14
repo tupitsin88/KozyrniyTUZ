@@ -1,0 +1,194 @@
+{
+  "checked_commit": "9dd8f8d3d3e35cf7fc61266de5f6288de6de8ebe",
+  "working_tree": "M .github/workflows/ci.yml\n M .gitignore\n M AI_USAGE.md\n M CONTRIBUTIONS.md\n M PROJECT.md\n M README.md\n M internal/auth/http_test.go\n M internal/auth/password_test.go\n M package-lock.json\n M package.json\n M web/tsconfig.json\n?? .gitleaks.toml\n?? SECURITY_ANALYSIS.md\n?? eslint.security.config.mjs\n?? reports/\n?? scripts/\n?? security-reviewed.json",
+  "source_sha256": {
+    ".dockerignore": "757ddcb8b0f9dd1019f9cf81b7db2c2b8da9c14677ae8c9155a4a9fb635a3dcf",
+    ".env.example": "7acec1602801a52ee410a3dc2e179da9ceb7a26e53478cff44d0e9fb652812b8",
+    ".github/workflows/ci.yml": "87eb1d6eab1d5b0858a6cd8d4db14b843cb89e26a25ec14ac60258022a3a935f",
+    ".gitignore": "809f968268bb60f7128264c1f026249b48adeb6ce009484d7c4bf1e25c0ff92b",
+    ".gitleaks.toml": "57565ddbea64689f89bc86efd345d8e1952be51088a9a01ebd4c676eae9a6bc1",
+    "AI_USAGE.md": "23e8fbba319382e24d53e8ed43f21c5dc4f6576dc28f681dbb08f4d243416bd6",
+    "CONTRIBUTIONS.md": "0ce9b6ac481e986ff700ab5b3f0465bdd637f8e949db324058704b2cc8a162cc",
+    "Dockerfile": "a5f6f0a0a1f802c3570a980508897808caf78fca6ba21a4d55eb8d5289b558bf",
+    "PROJECT.md": "42ff188d080ee513017595d7846be0cbc5d1cd7b8c16c81a3b2060dc0d189c7f",
+    "README.md": "fd9ae45bf845ced9b4267f1be22fd6eedfc8006b30cebab10709726e513c8f3d",
+    "SECURITY_ANALYSIS.md": "3265bd444d4222340ad7062a521fb62ce59e0f800f09481e57230f814f4f6ab7",
+    "SECURITY_DESIGN.md": "0049e589fe028902069262130497a9e267716b50704ffb27cbaaab68917e6672",
+    "SECURITY_EVIDENCE.md": "71c2a34711b5f8dd58a02b015576ed7f0b29d9bea19e1c4547bd286dee941054",
+    "SECURITY_REQUIREMENTS.md": "37448c43fd0082741956a29616385f80d84c18f789f9b30b32b638880cd318a3",
+    "THREAT_MODEL.md": "1634cb512ce60aba427e94ec35008f9e82dfdd57b853b294ab3e7678fe7331be",
+    "cmd/server/main.go": "7b38792847d2f157d4b2eeb4f9ba0df4c410709a01269489f43f91924e29a2fb",
+    "cmd/server/main_test.go": "fc00a7a007d49cfc4cb03c232709c29a9d7653de827f5967381c0d1a22c4f160",
+    "compose.yaml": "e4203f45228fb9c149f15007504a37396e8cc85c60fe3cf1864c75958be66a49",
+    "docker/init-db.sql": "201401182c844e3ab5e146e44ee515d7e56200d5997c0d2b8e2a4ecce8736994",
+    "e2e/club-flow.spec.mjs": "79d7aee68aadad2d519386eb3b6e7192de86594d9883e2dd89b1dd4cbbe0bb4b",
+    "eslint.security.config.mjs": "fae57489da1eb65be7a71ef89d28eb28e644ef6bcc75474b8362104ec3b5288d",
+    "go.mod": "6367742373c2b4014c7ecde9d19c87f685089250131ee48bffb47c3846fc18d6",
+    "go.sum": "34f8cf882e60317f7c30aacd20b58c1c56b2b15382d11744b17d3288e35f0f7e",
+    "internal/auth/applications_http.go": "b43ae31179d4f12e9b372de023f56ece3b1793a6c6f0bb3fdaa7ebdb8b157cb8",
+    "internal/auth/applications_http_test.go": "bae40c7da218891f785b07f423932d08361fdd22df32256dd454ca61c3c2689f",
+    "internal/auth/applications_integration_test.go": "20435b158dff5be5bd2cf8be92f182f232a714d60fa2235e6db252f2d86618bb",
+    "internal/auth/clubs_http.go": "9c6611a464ef89ac01608c23e0ac7f99ce4849ef1d99792cec735bc448491b99",
+    "internal/auth/clubs_integration_test.go": "775e6c14d294cbeb7c07bee7b2cfdd2307cbfe2246eeb496e71ea26655aadae7",
+    "internal/auth/http.go": "5315a4cd55d42e1b87cd50ae4b3816a0b0ce5da8f22ce24387a2a7e909363122",
+    "internal/auth/http_test.go": "c5647e7e71b1fb36c976ee8fedf969e9bde1d96dbc9c0cdffe3e21cf13f5456d",
+    "internal/auth/materials_archive_http.go": "25af1498bd0a19a7a141d567b7f8f6583550bef48fceac3c34e888a756757745",
+    "internal/auth/materials_archive_integration_test.go": "0b76fa616077f2591d18737893bd64037b21c6f284ebb36b5fa4848345807c53",
+    "internal/auth/pagination.go": "8bb364498a5bc6acb424dc795c27ad9f20ec535d5bf0b7e485b4fb9abb6f14b0",
+    "internal/auth/pagination_integration_test.go": "cc3162c0574ee3ec3be83e90037206f4b8dc01b285b1d58170f7c96a9dba7603",
+    "internal/auth/pagination_test.go": "82c8111ce9c44bad638a2ac1bddaefd377a5a90295226c2c66629f0483a68250",
+    "internal/auth/password.go": "d63440956cdd32c189dfa292023d0cfd39533ca2068c5b04b8e7c80691cb1ca1",
+    "internal/auth/password_test.go": "f0ad570244dba59866d5d0631dace8cc44d0094efddf6e7bffe4b211a3318cf9",
+    "internal/auth/rate_limit.go": "154087755f2218b90c057333ca75be1c7d68a3a3d358f338f27087bbe36c03e2",
+    "internal/auth/rate_limit_test.go": "6b66781a1dae730366a325190772063ed2689ad02d40c441d1558967452bb177",
+    "internal/auth/service.go": "c29510da69104a343e8e90dedbfcd76854610ae273070c3bc6adc642b51ac9f4",
+    "internal/auth/service_integration_test.go": "62d35a18e9e75d77c3bb4f9a332f61c14a266ee86ff18161e9d176f032ba8f64",
+    "internal/auth/session_cleanup.go": "1db8630efd017d7e044f5030522011e36c37664b1882409e544b1f8c5667f987",
+    "internal/auth/session_cleanup_test.go": "d9cf74fe41a9af461080d457e7f18635f1da066127963171be8c97b85403c376",
+    "internal/config/config.go": "409bc6c52e6c015d9ac01f2022f6bb2bfdb63517f48fc07ead6f524a40d53d7e",
+    "internal/config/config_test.go": "cd8afbda721f91b138fdc56342500741bc3df7cb60b34d8c61e7a1db38580f96",
+    "internal/database/database.go": "b7a54289eb2e7f9e337bea72a99504c3a2bcc30ec40aa29c32cadce56da6a1ef",
+    "internal/database/migrations/000001_initial_schema.sql": "58aeb47804ab931896c77816eeae6dafcd9154d7f038234a63c136e0717740c7",
+    "internal/database/migrations/000002_auth_constraints.sql": "154c8a88037150628b90cabb837be8b50541c183d05706a437b8b5f544df309a",
+    "internal/database/migrations/000003_session_cleanup_indexes.sql": "3cb8e84ca5784f0703252bfe74c54c0086db2ea73cc93aa86e162ea4567f9df4",
+    "package-lock.json": "bd353d74281ecd9de3b3f49498c6c04f9aa474cbbe7850d4bf89db0720247228",
+    "package.json": "690938ff0409251523b59fc6f78e1eeab2dcf5e2a76040b3a5b035ea09a0c944",
+    "playwright.config.mjs": "c3fb8ea25aef45fb4a97783b1111cf53bbbe83a303665f2a504af45641a70c79",
+    "scripts/security-scan.mjs": "9d05e82791fd88c9afc2893477b862d100a90b605c2729b307d60ba8644912c2",
+    "security-reviewed.json": "63952e275b0253fa7a833f424946b315abbe1fded6708603294cfb57242ec7bd",
+    "web/embed.go": "110b5bc90b8d00443ffb9339358775631d812349a5630ae6a862aa358a2d2870",
+    "web/src/app.ts": "0af24f98806a222ebdacc7be33c6f6255ebb5d5c85a2f10738ba9394e34e9c43",
+    "web/static/app.js": "ce0cf5b170503b0d24d7f2431ef3030945d0b120b201b04a7955a1f1adee1884",
+    "web/static/index.html": "de6a558c135bfe6ed66758920e6e5983fe6b97bb5172ac3ad20b31fac509d660",
+    "web/static/styles.css": "018232448fe3c115677e2dfb547221171393640443fe0f85a28d3cbe0c8a499e",
+    "web/tsconfig.json": "6fed57db0ff5a0e628aa0bbf89ca1d8ac79f461500a08d86802048f5e144b4e9"
+  },
+  "refs": "refs/codex/turn-diffs/captures/1794678110895/288b11c1-8ae8-424e-8686-39bc0bd62fc5/base 3b36c9a3e316554a1927c431e9c1ca0568305e85\nrefs/codex/turn-diffs/checkpoints/a42c57c441d40f06ee1375ad3c777c0f/f85e17cc420ac3d647c7a67e067a0239/1794678051303/46ebda91-6e1d-487a-b5b8-2611ec75ee16 3b36c9a3e316554a1927c431e9c1ca0568305e85\nrefs/heads/docs/add-sr 211f2b8dab3fd08523312e34db53176c5edc3879\nrefs/heads/feature/clubs-and-profiles 8b758837e211af62538036ca788f30c2795cefb8\nrefs/heads/feature/contributions f54e4214297a24da007cc08b6f2dbf0e90c96199\nrefs/heads/feature/entrance-and-sessions a2e275b805cfcc6a3fe40f316b717fdf42af1f9c\nrefs/heads/feature/interface 5110e8b3038e3e5913ca2f8b100895f23648a17d\nrefs/heads/feature/materials-and-archive 39ce872e33af61f541ea97e8348ac7ca478e5efc\nrefs/heads/feature/postgres-integration 67b457a0044e525b53ef5f7d67d3d06370d96309\nrefs/heads/feature/requests-of-membership c6b1983c11eeb233803d6c8f36cc339da1b4ba2b\nrefs/heads/feature/s-09-secrets 9dd8f8d3d3e35cf7fc61266de5f6288de6de8ebe\nrefs/heads/feature/s03 47672d7aba3dfef8cd36a417060a7426853cc238\nrefs/heads/feature/s04 d84587a840ac3934d93f541a91d53dfb879a2dec\nrefs/heads/feature/s05-prep 017f4c6af8c625e0f93b74301590de63459a9022\nrefs/heads/fix/project-audit ed648a54c9f3685e79f3d66819af3a4abfb6daf9\nrefs/heads/main 9dd8f8d3d3e35cf7fc61266de5f6288de6de8ebe\nrefs/remotes/origin/HEAD 9dd8f8d3d3e35cf7fc61266de5f6288de6de8ebe\nrefs/remotes/origin/docs/add-sr 211f2b8dab3fd08523312e34db53176c5edc3879\nrefs/remotes/origin/feature/clubs-and-profiles 8b758837e211af62538036ca788f30c2795cefb8\nrefs/remotes/origin/feature/contributions f54e4214297a24da007cc08b6f2dbf0e90c96199\nrefs/remotes/origin/feature/entrance-and-sessions a2e275b805cfcc6a3fe40f316b717fdf42af1f9c\nrefs/remotes/origin/feature/interface 5110e8b3038e3e5913ca2f8b100895f23648a17d\nrefs/remotes/origin/feature/materials-and-archive 39ce872e33af61f541ea97e8348ac7ca478e5efc\nrefs/remotes/origin/feature/postgres-integration 67b457a0044e525b53ef5f7d67d3d06370d96309\nrefs/remotes/origin/feature/requests-of-membership c6b1983c11eeb233803d6c8f36cc339da1b4ba2b\nrefs/remotes/origin/feature/s03 47672d7aba3dfef8cd36a417060a7426853cc238\nrefs/remotes/origin/feature/s04 d84587a840ac3934d93f541a91d53dfb879a2dec\nrefs/remotes/origin/feature/s05-prep 429441e697206de3fbc35c0753335c6cdbabce8b\nrefs/remotes/origin/fix/project-audit ed648a54c9f3685e79f3d66819af3a4abfb6daf9\nrefs/remotes/origin/main 9dd8f8d3d3e35cf7fc61266de5f6288de6de8ebe",
+  "history_commits": 66,
+  "shallow": false,
+  "started_at": "2026-11-14T17:47:49.249Z",
+  "versions": {
+    "gosec": "2.30.0",
+    "gitleaks": "8.30.1",
+    "eslint": "10.15.0",
+    "parser": "8.72.2",
+    "security_plugin": "4.2.1"
+  },
+  "platform": "win32/x64",
+  "commands": {
+    "gosec": {
+      "command": [
+        "C:\\Users\\artem\\AppData\\Local\\Temp\\kozyrniytuz-s09-tools\\gosec.exe",
+        "-fmt=json",
+        "-out=C:\\Users\\artem\\source\\repos\\KozyrniyTUZ\\reports\\security\\s09-after\\gosec.json",
+        "./cmd/...",
+        "./internal/...",
+        "./web/..."
+      ],
+      "exit_code": 1
+    },
+    "eslint": {
+      "command": [
+        "D:\\Program Files\\nodejs\\node.exe",
+        "node_modules/eslint/bin/eslint.js",
+        "--config",
+        "eslint.security.config.mjs",
+        "web/src",
+        "--format",
+        "json",
+        "--output-file",
+        "C:\\Users\\artem\\source\\repos\\KozyrniyTUZ\\reports\\security\\s09-after\\eslint.json"
+      ],
+      "exit_code": 0
+    },
+    "history": {
+      "command": [
+        "C:\\Users\\artem\\AppData\\Local\\Temp\\kozyrniytuz-s09-tools\\gitleaks\\gitleaks.exe",
+        "git",
+        "--config=.gitleaks.toml",
+        "--redact=100",
+        "--exit-code=10",
+        "--no-banner",
+        "--no-color",
+        "--log-level=error",
+        "--log-opts=--all",
+        "--report-format=json",
+        "--report-path=C:\\Users\\artem\\source\\repos\\KozyrniyTUZ\\reports\\security\\s09-after\\gitleaks-history.json",
+        "."
+      ],
+      "exit_code": 0
+    },
+    "tree": {
+      "command": [
+        "C:\\Users\\artem\\AppData\\Local\\Temp\\kozyrniytuz-s09-tools\\gitleaks\\gitleaks.exe",
+        "dir",
+        "--config=.gitleaks.toml",
+        "--redact=100",
+        "--exit-code=10",
+        "--no-banner",
+        "--no-color",
+        "--log-level=error",
+        "--report-format=json",
+        "--report-path=C:\\Users\\artem\\source\\repos\\KozyrniyTUZ\\reports\\security\\s09-after\\gitleaks-tree.json",
+        "C:\\Users\\artem\\AppData\\Local\\Temp\\kozyrniytuz-secrets-E7tmUc"
+      ],
+      "exit_code": 0
+    }
+  },
+  "runtimes": {
+    "node": "v24.21.0",
+    "go": "go version go1.26.9 windows/amd64"
+  },
+  "github_run_id": null,
+  "github_run_attempt": null,
+  "results": {
+    "gosec": 3,
+    "eslint": 1,
+    "secrets_history": 0,
+    "secrets_tree": 0
+  },
+  "complete": true,
+  "signals": [
+    {
+      "tool": "gosec",
+      "rule": "G115",
+      "file": "internal/auth/password.go",
+      "line": 79,
+      "source_sha256": "af87ca7412f263f4fa3bee1fbf85ebf0f142d3b0f3ebc2a20dd764a8f07ab4c2",
+      "file_lf_sha256": "917b33fda13298bfbf6437cd58c16321d0dfd0d8dc0099de5eecb533de0e9bfb"
+    },
+    {
+      "tool": "gosec",
+      "rule": "G124",
+      "file": "internal/auth/http.go",
+      "line": 258,
+      "source_sha256": "503a61e5bbaed153ac3fe565435f21bfdd7022221f84a7998ce57a61bff584f2",
+      "file_lf_sha256": "b0ab2fc9575103f38b74ae800eb78f53989d5b09c56201e4775b4e278c6efce2"
+    },
+    {
+      "tool": "gosec",
+      "rule": "G124",
+      "file": "internal/auth/http.go",
+      "line": 250,
+      "source_sha256": "503a61e5bbaed153ac3fe565435f21bfdd7022221f84a7998ce57a61bff584f2",
+      "file_lf_sha256": "b0ab2fc9575103f38b74ae800eb78f53989d5b09c56201e4775b4e278c6efce2"
+    },
+    {
+      "tool": "eslint",
+      "rule": "security/detect-object-injection",
+      "file": "web/src/app.ts",
+      "line": 529,
+      "source_sha256": "6463133d552f103a60de06e4af541a948dde5d2cb4d1a9d40ee05c783a3a3224",
+      "file_lf_sha256": "4e0b1c8ba31b33d24bc3fcae5e38c83c92aa6d59f411e42456db1187793f3398"
+    }
+  ],
+  "unreviewed": [],
+  "finished_at": "2026-11-14T17:47:53.416Z",
+  "exit_code": 0,
+  "reports_sha256": {
+    "gosec.json": "70e3fb0406b47e2b34217e8cb761c8a880b6695a7994060a280f87f5bb2b0440",
+    "eslint.json": "ed95acf28fc8962936907a5792620468cf4e2a88084f3eff1210d3181076f1e3",
+    "gitleaks-history.json": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+    "gitleaks-tree.json": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570"
+  }
+}

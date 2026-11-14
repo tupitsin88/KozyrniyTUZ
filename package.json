@@ -3,10 +3,19 @@
   "private": true,
   "scripts": {
     "build": "tsc -p web/tsconfig.json",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "security:scan": "node scripts/security-scan.mjs"
+  },
+  "overrides": {
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "11.0.1"
+    }
   },
   "devDependencies": {
     "@playwright/test": "^1.64.0",
+    "@typescript-eslint/parser": "8.72.2",
+    "eslint": "10.15.0",
+    "eslint-plugin-security": "4.2.1",
     "typescript": "^5.9.3"
   }
 }

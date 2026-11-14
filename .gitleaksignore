@@ -1,0 +1,8 @@
+# Reviewed SHA-256 file digests in the original S09 source manifests (SECURITY_ANALYSIS.md, S09-05).
+# Each fingerprint identifies one immutable commit, file, detector and line; other findings still fail.
+106c7f09d01c3a7d5e9acbe06587c224a6d59a89:reports/security/s09-before/source.json:generic-api-key:39
+106c7f09d01c3a7d5e9acbe06587c224a6d59a89:reports/security/s09-before/source.json:generic-api-key:40
+106c7f09d01c3a7d5e9acbe06587c224a6d59a89:reports/security/s09-before/source.json:generic-api-key:51
+106c7f09d01c3a7d5e9acbe06587c224a6d59a89:reports/security/s09-after/source.json:generic-api-key:40
+106c7f09d01c3a7d5e9acbe06587c224a6d59a89:reports/security/s09-after/source.json:generic-api-key:41
+106c7f09d01c3a7d5e9acbe06587c224a6d59a89:reports/security/s09-after/source.json:generic-api-key:52

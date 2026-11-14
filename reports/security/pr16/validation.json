@@ -1,0 +1,76 @@
+{
+    "checked_commit":  "106c7f09d01c3a7d5e9acbe06587c224a6d59a89",
+    "issue":  "generic-api-key false positives on six source-file SHA-256 digests in S09 report manifests",
+    "reviewed_fingerprints":  6,
+    "digest_validation":  {
+                              "value":  [
+                                            {
+                                                "file":  "reports/security/s09-before/source.json",
+                                                "line":  39,
+                                                "source_file":  "internal/auth/password.go",
+                                                "source_revision":  "9dd8f8d",
+                                                "verified_file_digest":  true
+                                            },
+                                            {
+                                                "file":  "reports/security/s09-before/source.json",
+                                                "line":  40,
+                                                "source_file":  "internal/auth/password_test.go",
+                                                "source_revision":  "9dd8f8d",
+                                                "verified_file_digest":  true
+                                            },
+                                            {
+                                                "file":  "reports/security/s09-before/source.json",
+                                                "line":  51,
+                                                "source_file":  "internal/database/migrations/000002_auth_constraints.sql",
+                                                "source_revision":  "9dd8f8d",
+                                                "verified_file_digest":  true
+                                            },
+                                            {
+                                                "file":  "reports/security/s09-after/source.json",
+                                                "line":  40,
+                                                "source_file":  "internal/auth/password.go",
+                                                "source_revision":  "9dd8f8d",
+                                                "verified_file_digest":  true
+                                            },
+                                            {
+                                                "file":  "reports/security/s09-after/source.json",
+                                                "line":  41,
+                                                "source_file":  "internal/auth/password_test.go",
+                                                "source_revision":  "106c7f0",
+                                                "verified_file_digest":  true
+                                            },
+                                            {
+                                                "file":  "reports/security/s09-after/source.json",
+                                                "line":  52,
+                                                "source_file":  "internal/database/migrations/000002_auth_constraints.sql",
+                                                "source_revision":  "9dd8f8d",
+                                                "verified_file_digest":  true
+                                            }
+                                        ],
+                              "Count":  6
+                          },
+    "before":  {
+                   "history_findings":  6,
+                   "scan_exit_code":  1
+               },
+    "after":  {
+                  "complete":  true,
+                  "scan_exit_code":  0,
+                  "results":  {
+                                  "gosec":  3,
+                                  "eslint":  1,
+                                  "secrets_history":  0,
+                                  "secrets_tree":  0
+                              }
+              },
+    "regression":  {
+                       "test":  "New generated synthetic API-key-like value in a temporary directory outside the repository",
+                       "gitleaks_exit_code":  10,
+                       "detected":  true
+                   },
+    "candidate_commit_history":  {
+                                     "test":  "All fix files committed in a separate temporary clone",
+                                     "exit_code":  0,
+                                     "findings":  0
+                                 }
+}

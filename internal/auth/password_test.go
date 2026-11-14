@@ -1,9 +1,21 @@
 package auth
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 )
+
+func TestVerifyPasswordRejectsWrongDecodedHashLength(t *testing.T) {
+	salt := base64.RawStdEncoding.EncodeToString(make([]byte, passwordSaltLength))
+	for _, size := range []int{passwordHashLength - 1, passwordHashLength + 1} {
+		digest := base64.RawStdEncoding.EncodeToString(make([]byte, size))
+		verifier := "v=1$argon2id$m=19456,t=2,p=1$" + salt + "$" + digest
+		if _, _, err := verifyPassword(verifier, "correct horse battery staple"); err == nil {
+			t.Fatalf("accepted decoded hash length %d, want exactly %d", size, passwordHashLength)
+		}
+	}
+}
 
 func TestHashPasswordUsesUniqueArgon2idSalt(t *testing.T) {
 	params := argonParameters{memory: 19 * 1024, iterations: 2, parallel: 1}

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tupitsin88/KozyrniyTUZ/internal/config"
 )
 
 func TestRegistrationRequiresTrustedOriginAndStrictJSON(t *testing.T) {
@@ -124,5 +126,46 @@ func TestProductionSessionCookieAttributes(t *testing.T) {
 	cookie := cookies[0]
 	if cookie.Name != "__Host-session" || !cookie.Secure || !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode || cookie.Path != "/" || cookie.Domain != "" || cookie.MaxAge != int((12*time.Hour).Seconds()) {
 		t.Fatalf("production session cookie has unsafe attributes: %#v", cookie)
+	}
+}
+
+func TestSessionCookiePolicyFollowsConfiguredOrigin(t *testing.T) {
+	for _, tc := range []struct {
+		origin string
+		secure bool
+		name   string
+	}{
+		{"https://clubs.example", true, "__Host-session"},
+		{"http://localhost:8080", false, "club-session"},
+	} {
+		t.Run(tc.origin, func(t *testing.T) {
+			service, err := NewService(nil, config.Config{
+				TrustedOrigin: tc.origin, SessionAbsolute: 12 * time.Hour,
+				ArgonMemory: 19 * 1024, ArgonIterations: 2, ArgonParallelism: 1,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			handler := &HTTPHandler{service: service}
+			for _, clear := range []bool{false, true} {
+				response := httptest.NewRecorder()
+				if clear {
+					handler.clearSessionCookie(response)
+				} else {
+					handler.setSessionCookie(response, make([]byte, 32))
+				}
+				cookies := response.Result().Cookies()
+				if len(cookies) != 1 {
+					t.Fatalf("clear=%v: got %d cookies", clear, len(cookies))
+				}
+				cookie := cookies[0]
+				if cookie.Name != tc.name || cookie.Secure != tc.secure || !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode || cookie.Path != "/" || cookie.Domain != "" {
+					t.Fatalf("clear=%v: unsafe cookie policy: %#v", clear, cookie)
+				}
+				if clear && (cookie.MaxAge != -1 || cookie.Value != "") {
+					t.Fatalf("clearing cookie does not expire it: %#v", cookie)
+				}
+			}
+		})
 	}
 }
