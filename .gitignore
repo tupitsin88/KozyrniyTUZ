@@ -5,3 +5,4 @@ Evidence/
 .env
 .env.*
 !.env.example
+reports/security/local/

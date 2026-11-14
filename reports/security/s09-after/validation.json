@@ -1,0 +1,10 @@
+﻿{
+    "go_test_exit":  0,
+    "go_vet_exit":  0,
+    "go_build_exit":  0,
+    "postgres":  "18.0",
+    "database":  "isolated temporary PostgreSQL on loopback:55439; each integration test uses its own disposable schema",
+    "browser_test":  "not rerun: compatible Playwright Chromium 1248 not installed; frontend build compared separately",
+    "checked_commit":  "9dd8f8d3d3e35cf7fc61266de5f6288de6de8ebe",
+    "configuration":  "working tree; exact source hashes in source.json"
+}

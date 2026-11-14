@@ -1,0 +1,60 @@
+{
+	"Golang errors": {},
+	"Issues": [
+		{
+			"severity": "HIGH",
+			"confidence": "MEDIUM",
+			"cwe": {
+				"id": "190",
+				"url": "https://cwe.mitre.org/data/definitions/190.html"
+			},
+			"rule_id": "G115",
+			"details": "integer overflow conversion int -\u003e uint32",
+			"file": "C:\\Users\\artem\\source\\repos\\KozyrniyTUZ\\internal\\auth\\password.go",
+			"code": "78: \t}\n79: \tactual := argon2.IDKey([]byte(password), salt, params.iterations, params.memory, params.parallel, uint32(len(expected)))\n80: \treturn subtle.ConstantTimeCompare(actual, expected) == 1, \u0026params, nil\n",
+			"line": "79",
+			"column": "106",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "MEDIUM",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "614",
+				"url": "https://cwe.mitre.org/data/definitions/614.html"
+			},
+			"rule_id": "G124",
+			"details": "http.Cookie missing or has insecure Secure, HttpOnly, or SameSite attribute",
+			"file": "C:\\Users\\artem\\source\\repos\\KozyrniyTUZ\\internal\\auth\\http.go",
+			"code": "257: func (h *HTTPHandler) clearSessionCookie(w http.ResponseWriter) {\n258: \thttp.SetCookie(w, \u0026http.Cookie{\n259: \t\tName: h.service.CookieName(), Value: \"\", Path: \"/\", HttpOnly: true,\n",
+			"line": "258",
+			"column": "32",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "MEDIUM",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "614",
+				"url": "https://cwe.mitre.org/data/definitions/614.html"
+			},
+			"rule_id": "G124",
+			"details": "http.Cookie missing or has insecure Secure, HttpOnly, or SameSite attribute",
+			"file": "C:\\Users\\artem\\source\\repos\\KozyrniyTUZ\\internal\\auth\\http.go",
+			"code": "249: func (h *HTTPHandler) setSessionCookie(w http.ResponseWriter, raw []byte) {\n250: \thttp.SetCookie(w, \u0026http.Cookie{\n251: \t\tName: h.service.CookieName(), Value: base64.RawURLEncoding.EncodeToString(raw),\n",
+			"line": "250",
+			"column": "32",
+			"nosec": false,
+			"suppressions": null
+		}
+	],
+	"Stats": {
+		"files": 13,
+		"lines": 3134,
+		"nosec": 0,
+		"found": 3
+	},
+	"GosecVersion": "2.30.0"
+}

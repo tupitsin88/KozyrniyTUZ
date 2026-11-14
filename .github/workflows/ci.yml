@@ -64,14 +64,14 @@ jobs:
       - name: Run Go tests with PostgreSQL integration enabled
         shell: bash
         run: |
-          go test -count=1 -json ./... | tee Evidence/go-tests.jsonl
+          go test -count=1 -json ./cmd/... ./internal/... ./web/... | tee Evidence/go-tests.jsonl
           jq -es 'any(.[]; .Action == "pass" and ((.Test // "") | startswith("TestPostgres")))
             and (any(.[]; .Action == "skip" and .Test != null) | not)' Evidence/go-tests.jsonl
         env:
           AUTH_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/club_membership_test?sslmode=disable
 
       - name: Run Go vet
-        run: go vet ./...
+        run: go vet ./cmd/... ./internal/... ./web/...
 
       - name: Build server
         run: go build ./cmd/server
@@ -152,4 +152,54 @@ jobs:
         with:
           name: verification-stand-${{ github.run_attempt }}
           path: Evidence/
+          retention-days: 30
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out full available history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install locked JavaScript analyzers
+        run: npm ci --ignore-scripts
+
+      - name: Install pinned native analyzers
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools="$RUNNER_TEMP/security-tools"
+          mkdir -p "$tools"
+          cd "$tools"
+          curl -fLsS --retry 3 --max-time 180 https://github.com/securego/gosec/releases/download/v2.30.0/gosec_2.30.0_linux_amd64.tar.gz -o gosec.tar.gz
+          echo '3fcce2c4e802ff4169217874602a7df355e9a37bcb6ffaa34b08f3d5f336cdfb  gosec.tar.gz' | sha256sum -c -
+          tar -xzf gosec.tar.gz gosec
+          curl -fLsS --retry 3 --max-time 180 https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o gitleaks.tar.gz
+          echo '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tar.gz' | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          echo "$tools" >> "$GITHUB_PATH"
+
+      - name: Run SAST and redacted secret scans
+        run: npm run security:scan
+
+      - name: Upload primary security evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: security-${{ github.run_attempt }}
+          path: reports/security/local/
           retention-days: 30

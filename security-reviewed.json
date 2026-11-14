@@ -1,0 +1,46 @@
+[
+    {
+        "id":  "S09-01",
+        "tool":  "gosec",
+        "rule":  "G115",
+        "file":  "internal/auth/password.go",
+        "line":  79,
+        "source_sha256":  "af87ca7412f263f4fa3bee1fbf85ebf0f142d3b0f3ebc2a20dd764a8f07ab4c2",
+        "file_lf_sha256":  "917b33fda13298bfbf6437cd58c16321d0dfd0d8dc0099de5eecb533de0e9bfb",
+        "decision":  "not_confirmed",
+        "reason":  "len(expected) is checked against passwordHashLength (32) immediately before conversion; no overflow is reachable. TestVerifyPasswordRejectsWrongDecodedHashLength rejects 31/33 bytes; valid 32-byte verifier is covered by TestHashPasswordUsesUniqueArgon2idSalt."
+    },
+    {
+        "id":  "S09-02",
+        "tool":  "gosec",
+        "rule":  "G124",
+        "file":  "internal/auth/http.go",
+        "line":  258,
+        "source_sha256":  "503a61e5bbaed153ac3fe565435f21bfdd7022221f84a7998ce57a61bff584f2",
+        "file_lf_sha256":  "b0ab2fc9575103f38b74ae800eb78f53989d5b09c56201e4775b4e278c6efce2",
+        "decision":  "not_confirmed",
+        "reason":  "HttpOnly and SameSite=Lax are explicit. CookieSecure follows configured HTTPS origin for both issuing and clearing. Local HTTP intentionally has Secure=false; external deployment requires HTTPS. Covered by TestSessionCookiePolicyFollowsConfiguredOrigin."
+    },
+    {
+        "id":  "S09-02",
+        "tool":  "gosec",
+        "rule":  "G124",
+        "file":  "internal/auth/http.go",
+        "line":  250,
+        "source_sha256":  "503a61e5bbaed153ac3fe565435f21bfdd7022221f84a7998ce57a61bff584f2",
+        "file_lf_sha256":  "b0ab2fc9575103f38b74ae800eb78f53989d5b09c56201e4775b4e278c6efce2",
+        "decision":  "not_confirmed",
+        "reason":  "HttpOnly and SameSite=Lax are explicit. CookieSecure follows configured HTTPS origin for both issuing and clearing. Local HTTP intentionally has Secure=false; external deployment requires HTTPS. Covered by TestSessionCookiePolicyFollowsConfiguredOrigin."
+    },
+    {
+        "id":  "S09-03",
+        "tool":  "eslint",
+        "rule":  "security/detect-object-injection",
+        "file":  "web/src/app.ts",
+        "line":  529,
+        "source_sha256":  "6463133d552f103a60de06e4af541a948dde5d2cb4d1a9d40ee05c783a3a3224",
+        "file_lf_sha256":  "4e0b1c8ba31b33d24bc3fcae5e38c83c92aa6d59f411e42456db1187793f3398",
+        "decision":  "not_confirmed",
+        "reason":  "Read-only lookup of a fixed display-label dictionary; DB constrains statuses. Result goes through textContent. No object mutation, code execution or authorization decision."
+    }
+]

@@ -1,0 +1,23 @@
+{
+    "checked_at":  "2026-11-14T17:48:40.6077014Z",
+    "failure_case":  "Real Gitleaks 8.30.1 invoked through a temporary wrapper with an invalid Git log option; no project vulnerability or credential added",
+    "expected_failure":  {
+                             "complete":  false,
+                             "exit_code":  2
+                         },
+    "observed_failure":  {
+                             "complete":  false,
+                             "exit_code":  2,
+                             "error":  "gitleaks reported a scan error"
+                         },
+    "normal_scan":  {
+                        "complete":  true,
+                        "exit_code":  0,
+                        "results":  {
+                                        "gosec":  3,
+                                        "eslint":  1,
+                                        "secrets_history":  0,
+                                        "secrets_tree":  0
+                                    }
+                    }
+}
